@@ -1,0 +1,6 @@
+import os
+
+GCP_PROJECT_NAME = os.environ.get("GOOGLE_CLOUD_PROJECT_NAME")
+GCP_KEY_PATH= os.environ.get("GOOGLE_CLOUD_KEY_PATH")
+GCP_API_KEY=os.environ.get("GOOGLE_CLOUD_API_KEY")
+GEE_KEY=os.environ.get("GOOGLE_EARTH_ENGINE_KEY")

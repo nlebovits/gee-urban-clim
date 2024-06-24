@@ -2,8 +2,9 @@ import re
 
 import ee
 from data_utils.make_training_data import make_training_data
-from utils.general_utils.monitor_ee_tasks import monitor_tasks
 from google.cloud import storage
+
+from utils.general_utils.monitor_ee_tasks import monitor_tasks
 
 
 def list_gcs_files(bucket_name, prefix):
@@ -40,6 +41,7 @@ def extract_date_from_filename(filename):
     else:
         return None
 
+
 def start_export_task(geotiff, description, bucket, fileNamePrefix, scale):
     print(f"Starting export: {description}")
     task = ee.batch.Export.image.toCloudStorage(
@@ -54,6 +56,7 @@ def start_export_task(geotiff, description, bucket, fileNamePrefix, scale):
     )
     task.start()
     return task
+
 
 def check_and_export_geotiffs_to_bucket(
     bucket_name, fileNamePrefix, flood_dates, bbox, scale=90

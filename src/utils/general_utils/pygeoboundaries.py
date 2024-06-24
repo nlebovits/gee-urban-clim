@@ -1,11 +1,11 @@
 from typing import List, Union
+
+import ee
 import geojson
 import requests
-from requests_cache import CachedSession
-from data_utils import countries_iso_dict
-from data_utils import iso_codes
+from data_utils import countries_iso_dict, iso_codes
 from fuzzywuzzy import process
-import ee
+from requests_cache import CachedSession
 
 
 class SessionManager:

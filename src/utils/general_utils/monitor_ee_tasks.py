@@ -1,4 +1,5 @@
 import time
+
 import ee
 
 
@@ -25,7 +26,9 @@ def monitor_tasks(tasks, sleep_interval=10):
                     if state == "COMPLETED":
                         print(f"Task {task.id} completed successfully.")
                     elif state == "FAILED":
-                        print(f"Task {task.id} failed with error: {status.get('error_message', 'No error message provided.')}")
+                        print(
+                            f"Task {task.id} failed with error: {status.get('error_message', 'No error message provided.')}"
+                        )
                     elif state == "CANCELLED":
                         print(f"Task {task.id} was cancelled.")
                     completed_tasks.add(task.id)

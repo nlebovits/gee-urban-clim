@@ -1,0 +1,35 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[packages]
+geemap = "==0.29.6"
+wxee = "==0.4.1"
+ipykernel = "==6.27.1"
+gdown = "==4.7.1"
+folium = "==0.15.1"
+pyproj = "==3.6.1"
+rio-cogeo = "==5.1.1"
+earthengine-api = "==0.1.388"
+openpyxl = "==3.1.2"
+pygeoboundaries = "==0.0.2"
+geopandas = "==0.14.3"
+geojson = "==3.1.0"
+requests-cache = "==1.1.1"
+colorcet = "==3.0.1"
+matplotlib = "==3.8.2"
+holoviews = "==1.18.2"
+xarray = "==2024.1.1"
+xee = "==0.0.8"
+fuzzywuzzy = "==0.18.0"
+python-levenshtein = "==0.25.0"
+pretty-errors = "==1.2.25"
+black = "==24.3.0"
+pre-commit = "==3.6.2"
+scikit-learn = "==1.4.1.post1"
+rasterio = "==1.3.9"
+isort = "==5.13.2"
+
+[requires]
+python_version = "3.11"

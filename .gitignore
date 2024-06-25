@@ -1,3 +1,6 @@
+# http_cache
+http_cache.sqlite
+
 # ignore credentials
 credentials/ 
 

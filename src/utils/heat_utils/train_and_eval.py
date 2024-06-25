@@ -1,255 +1,272 @@
-# so here, we need to read in all the data in the gee-urban-clim-nl bucket that is followed by /heat_data. It all gets read into a single image collection.
-
-# we sample 10,000 land cover pixels from the image collection at a scale of 10m. We then calculate the histogram of the land cover classes and determine the number of samples to take for each class.
-#
-# We then stratified sample the image collection using the determined number of samples per class. We then split the data into training and testing sets.
-
-
 import os
+from collections import Counter
+from datetime import datetime
 
 import ee
 from dotenv import load_dotenv
 from google.cloud import storage
 
-from src.config.config import HEAT_SCALE, TRAINING_DATA_COUNTRIES
+from src.config.config import (
+    HEAT_MODEL_ASSET_ID,
+    HEAT_SCALE,
+    HEAT_INPUT_PROPERTIES,
+    TRAINING_DATA_COUNTRIES,
+)
 from src.utils.general_utils.data_exists import data_exists
+from src.utils.general_utils.monitor_ee_tasks import monitor_tasks
 
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-# Set the environment variable for Google Application Credentials
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
 
 training_data_countries = TRAINING_DATA_COUNTRIES
+cloud_project = GOOGLE_CLOUD_PROJECT
+bucket_name = GOOGLE_CLOUD_BUCKET
+
+ee.Initialize(project=cloud_project)
 
 
-# Function to list blobs with a specific prefix
 def list_blobs_with_prefix(bucket_name, prefix):
-    storage_client = storage.Client()
+    storage_client = storage.Client(project=cloud_project)
     bucket = storage_client.bucket(bucket_name)
     return list(bucket.list_blobs(prefix=prefix))
 
 
-# Function to read data for a list of countries into an image collection
 def read_data_to_image_collection(training_data_countries):
     bucket_name = GOOGLE_CLOUD_BUCKET
-    all_images = []
+    all_tif_list = []
 
+    # Check for data existence and collect URIs
     for country in training_data_countries:
         snake_case_place_name = country.replace(" ", "_").lower()
         directory_name = f"heat_data/{snake_case_place_name}/inputs/"
 
         if data_exists(bucket_name, directory_name):
-            print(f"Data for {country} exists. Reading data...")
+            print(f"Data for {country} exists. Collecting URIs...")
+            tif_list = []
             for year in range(datetime.now().year - 6, datetime.now().year - 1):
                 prefix = f"{directory_name}{year}/heat_{year}"
-                blobs = list_blobs_with_prefix(bucket_name, prefix)
+                storage_client = storage.Client()
+                blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
                 for blob in blobs:
                     if blob.name.endswith(".tif"):
                         uri = f"gs://{bucket_name}/{blob.name}"
-                        image = ee.Image.loadGeoTIFF(uri)
-                        all_images.append(image)
+                        tif_list.append(uri)
+
+            if tif_list:
+                print(f"Collected URIs for {country}:")
+                for uri in tif_list:
+                    print(uri)
+                all_tif_list.extend(tif_list)
+            else:
+                print(f"No .tif files found for {country}.")
         else:
             print(f"No data found for {country}. Skipping...")
 
-    if all_images:
-        image_collection = ee.ImageCollection.fromImages(all_images)
+    if all_tif_list:
+        print("Reading images from cloud bucket into image collection...")
+        ee_image_list = [ee.Image.loadGeoTIFF(url) for url in all_tif_list]
+        image_collection = ee.ImageCollection.fromImages(ee_image_list)
+
+        info = image_collection.size().getInfo()
+        print(f"Collection contains {info} images.")
         return image_collection
     else:
         print("No data found for any country.")
         return None
 
 
-image_collection = read_data_to_image_collection(training_data_countries)
-
-
 def convert_landcover_to_int(image):
-    # Convert the 'landcover' band to integer.
     landcover_int = image.select("landcover").toInt()
-
-    # Replace the original 'landcover' band with the converted integer type band.
-    # The 'overwrite' parameter ensures the original band is overwritten.
     return image.addBands(landcover_int.rename("landcover"), overwrite=True)
 
 
-# Apply the function to each image in the collection.
-image_collections = image_collection.map(convert_landcover_to_int)
+def train_and_evaluate():
+    # Check if the trained model exists
+    if ee.data.getInfo(HEAT_MODEL_ASSET_ID):
+        print(
+            f"Model already exists at {HEAT_MODEL_ASSET_ID}. Skipping training and evaluation."
+        )
+        return
 
-print("Image collections", image_collections.first().getInfo())
+    print("Reading data to image collection...")
+    image_collection = read_data_to_image_collection(training_data_countries)
 
-from collections import Counter
+    if image_collection is None:
+        print("No image collection to process.")
+        return
 
-# Sample the land cover values
-sample = (
-    image_collections.first()
-    .select("landcover")
-    .sample(
-        # region=bbox,
-        scale=10,  # Adjust scale as needed to match your image resolution and the granularity you need
-        numPixels=10000,  # Number of pixels to sample for estimating class distribution
-        seed=0,
-        geometries=False,  # Geometry information not required for this step
+    print("Converting landcover to integer...")
+    image_collections = image_collection.map(convert_landcover_to_int)
+
+    print("Sampling the land cover values...")
+    sample = (
+        image_collections.first()
+        .select("landcover")
+        .sample(
+            scale=10,
+            numPixels=10000,
+            seed=0,
+            geometries=False,
+        )
     )
-)
 
-# Extract land cover class values from the sample
-sampled_values = sample.aggregate_array("landcover").getInfo()
+    sampled_values = sample.aggregate_array("landcover").getInfo()
+    class_histogram = Counter(sampled_values)
 
-# Calculate the histogram (frequency of each class)
-class_histogram = Counter(sampled_values)
+    total_samples = 100000
+    class_values = list(class_histogram.keys())
+    class_points = [
+        int((freq / sum(class_histogram.values())) * total_samples)
+        for freq in class_histogram.values()
+    ]
 
-# Total number of samples you aim to distribute across classes
-total_samples = 100000
+    land_cover_names = {
+        10: "Tree cover",
+        20: "Shrubland",
+        30: "Grassland",
+        40: "Cropland",
+        50: "Built-up",
+        60: "Bare / sparse vegetation",
+        70: "Snow and ice",
+        80: "Permanent water bodies",
+        90: "Herbaceous wetland",
+        95: "Mangroves",
+        100: "Moss and lichen",
+    }
 
-# Determine class values (unique land cover classes) and their proportional sample sizes
-class_values = list(class_histogram.keys())
-class_points = [
-    int((freq / sum(class_histogram.values())) * total_samples)
-    for freq in class_histogram.values()
-]
+    print(
+        "Initial Class Histogram:",
+        {land_cover_names.get(k, k): v for k, v in class_histogram.items()},
+    )
 
-# Define the class names and codes
-land_cover_names = {
-    10: "Tree cover",
-    20: "Shrubland",
-    30: "Grassland",
-    40: "Cropland",
-    50: "Built-up",
-    60: "Bare / sparse vegetation",
-    70: "Snow and ice",
-    80: "Permanent water bodies",
-    90: "Herbaceous wetland",
-    95: "Mangroves",
-    100: "Moss and lichen",
-}
+    if not class_histogram:
+        print("Error: Failed to generate a class histogram.")
+        raise ValueError("Failed to generate a class histogram.")
 
-# Print initial class histogram
-print(
-    "Initial Class Histogram:",
-    {land_cover_names.get(k, k): v for k, v in class_histogram.items()},
-)
+    half_total_samples = total_samples // 5
+    if 50 in class_histogram:
+        class_histogram[50] = half_total_samples
+    if 40 in class_histogram:
+        class_histogram[40] = half_total_samples
+    if 30 in class_histogram:
+        class_histogram[30] = half_total_samples
 
-if not class_histogram:
-    print("Error: Failed to generate a class histogram.")
-    raise ValueError("Failed to generate a class histogram.")
+    print(
+        "Updated Class Histogram:",
+        {land_cover_names.get(k, k): v for k, v in class_histogram.items()},
+    )
 
-# Set the "Built-up", "Grassland", and "Cropland" class sizes equal to 1/2 the total number of pixels
-half_total_samples = total_samples // 2
-if 50 in class_histogram:  # Built-up class code
-    class_histogram[50] = half_total_samples
-if 40 in class_histogram:  # Cropland class code
-    class_histogram[40] = half_total_samples
-if 30 in class_histogram:  # Grassland class code
-    class_histogram[30] = half_total_samples
+    class_values = list(class_histogram.keys())
+    class_points = [
+        int((freq / sum(class_histogram.values())) * total_samples)
+        for freq in class_histogram.values()
+    ]
 
-# Print updated class histogram
-print(
-    "Updated Class Histogram:",
-    {land_cover_names.get(k, k): v for k, v in class_histogram.items()},
-)
+    class_band = "landcover"
+    n_images = image_collections.size().getInfo()
+    samples_per_image = total_samples // n_images
 
-# Recalculate class points based on the updated histogram
-class_values = list(class_histogram.keys())
-class_points = [
-    int((freq / sum(class_histogram.values())) * total_samples)
-    for freq in class_histogram.values()
-]
+    def stratified_sample_per_image(image):
+        stratified_sample = image.stratifiedSample(
+            numPoints=samples_per_image,
+            classBand=class_band,
+            scale=HEAT_SCALE,
+            seed=0,
+            classValues=class_values,
+            classPoints=class_points,
+            geometries=True,
+        )
+        return stratified_sample
 
-class_band = "landcover"
-n_images = image_collections.size().getInfo()
-samples_per_image = total_samples // n_images
+    print("Applying stratified sampling...")
+    samples = image_collections.map(stratified_sample_per_image)
 
+    stratified_sample = samples.flatten()
 
-# Function to apply stratified sampling to an image
-def stratified_sample_per_image(image):
-    # Perform stratified sampling
-    stratified_sample = image.stratifiedSample(
-        numPoints=samples_per_image,
-        classBand=class_band,
-        # region=bbox,
+    training_sample = stratified_sample.randomColumn()
+    training = training_sample.filter(ee.Filter.lt("random", 0.7))
+    testing = training_sample.filter(ee.Filter.gte("random", 0.7))
+
+    inputProperties = HEAT_INPUT_PROPERTIES
+    numTrees = 10
+    print("Training the Random Forest regression model...")
+    regressor = (
+        ee.Classifier.smileRandomForest(numTrees)
+        .setOutputMode("REGRESSION")
+        .train(training, classProperty="median_top5", inputProperties=inputProperties)
+    )
+
+    print("Model training completed.")
+
+    # Evaluate the classifier on the most recent image
+    print("Evaluating the classifier on the most recent image...")
+    sorted_filtered_collection = image_collections.sort("system:time_start", False)
+    recent_image = sorted_filtered_collection.first()
+
+    predicted_image = recent_image.select(inputProperties).classify(regressor)
+
+    squared_difference = (
+        recent_image.select("median_top5")
+        .subtract(predicted_image)
+        .pow(2)
+        .rename("difference")
+    )
+
+    mean_squared_error = squared_difference.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=recent_image.geometry(),
         scale=HEAT_SCALE,
-        seed=0,
-        classValues=class_values,
-        classPoints=class_points,
-        geometries=True,
+        maxPixels=1e14,
     )
-    # Return the sample
-    return stratified_sample
 
+    rmse = ee.Number(mean_squared_error.get("difference")).sqrt()
+    rmse_feature = ee.Feature(None, {"RMSE": rmse})
 
-# Apply the function to each image in the collection
-samples = image_collections.map(stratified_sample_per_image)
+    # Step 2: Export the RMSE result
+    output_path = "data/outputs/rmse_results"
 
-# Flatten the collection of collections into a single FeatureCollection
-stratified_sample = samples.flatten()
+    def export_results_to_cloud_storage(result, result_type, bucket_name, output_path):
+        task = ee.batch.Export.table.toCloudStorage(
+            collection=ee.FeatureCollection([result]),
+            description=f"Export {result_type} results",
+            bucket=bucket_name,
+            fileNamePrefix=output_path,
+            fileFormat="CSV",
+        )
+        task.start()
+        print(
+            f"Exporting {result_type} results to {output_path} in bucket {bucket_name}."
+        )
+        return task
 
-# Split the data into training and testing
-training_sample = stratified_sample.randomColumn()
-training = training_sample.filter(ee.Filter.lt("random", 0.7))
-testing = training_sample.filter(
-    ee.Filter.gte("random", 0.7)
-)  # rather than testing on this dataset, we will use the most recent year's data to test
+    task = export_results_to_cloud_storage(
+        mean_squared_error, "RMSE", bucket_name, output_path
+    )
 
-# Train the Random Forest regression model
-inputProperties = ["longitude", "latitude", "landcover", "elevation"]
-numTrees = 10  # Number of trees in the Random Forest
-regressor = (
-    ee.Classifier.smileRandomForest(numTrees)
-    .setOutputMode("REGRESSION")
-    .train(training, classProperty="median_top5", inputProperties=inputProperties)
-)
+    monitor_tasks([task], 30)
 
-# # Sort the filtered collection in descending order by the 'system:time_start' property
-# sorted_filtered_collection = image_collections.sort(
-#     "system:time_start", False
-# )  # False for descending order
+    print("Exported RMSE results to cloud storage.")
 
-# # Now, selecting the first image will give you the most recent image in the collection
-# recent_image = sorted_filtered_collection.first()
+    def export_model_as_ee_asset(regressor, asset_id):
 
-# predicted_image = recent_image.select(inputProperties).classify(regressor)
+        # Export the classifier
+        task = ee.batch.Export.classifier.toAsset(
+            classifier=regressor,
+            # description="heat_rf_model_export",
+            assetId=asset_id,
+        )
+        task.start()
+        print(f"Exporting trained heat model with GEE ID {asset_id}.")
+        return task
 
-# # Calculate the squared difference between actual and predicted LST
-# squared_difference = (
-#     recent_image.select("median_top5")
-#     .subtract(predicted_image)
-#     .pow(2)
-#     .rename("difference")
-# )
+    task = export_model_as_ee_asset(regressor, HEAT_MODEL_ASSET_ID)
 
+    monitor_tasks([task], 30)
 
-# def export_results_to_cloud_storage(result, result_type, bucket_name, output_path):
-#     task = ee.batch.Export.table.toCloudStorage(
-#         collection=ee.FeatureCollection([ee.Feature(None, {"result": result})]),
-#         description=f"Export {result_type} results",
-#         bucket=bucket_name,
-#         fileNamePrefix=output_path,
-#         fileFormat="CSV",
-#     )
-#     task.start()
-#     print(f"Exporting {result_type} results to {output_path} in bucket {bucket_name}.")
-
-
-# # Compute the mean squared error over your area of interest (aoi)
-# mean_squared_error = squared_difference.reduceRegion(
-#     reducer=ee.Reducer.mean(),
-#     geometry=bbox,
-#     scale=scale,  # Adjust scale to match your dataset's resolution
-#     maxPixels=1e14,
-# )
-
-# # Calculate the square root of the mean squared error to get the RMSE
-# rmse = mean_squared_error.getInfo()["difference"] ** 0.5
-
-# # Prepare the RMSE result for export
-# rmse_result = {"RMSE": rmse}
-
-# # Specify your cloud storage bucket name and output path
-# bucket_name = "hotspotstoplight_heatmapping"
-# directory_name = f"data/{snake_case_place_name}/outputs/"
-# output_path = directory_name + "rmse_results"
-
-# # Export the RMSE result to cloud storage
-# export_results_to_cloud_storage(rmse_result, "RMSE", bucket_name, output_path)
+    print(
+        "Exported trained model to an Earth Engine asset with ID ", HEAT_MODEL_ASSET_ID
+    )

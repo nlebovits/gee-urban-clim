@@ -1,12 +1,10 @@
-import ee
 import csv
-from google.cloud import storage
 from io import StringIO
 
 import ee
 from data_utils.cloud_mask import cloud_mask
 from data_utils.scaling_factors import apply_scale_factors
-
+from google.cloud import storage
 
 
 def download_ndvi_data_for_year(

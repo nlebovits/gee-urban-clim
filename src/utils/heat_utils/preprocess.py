@@ -9,6 +9,7 @@ def apply_scale_factors(image):
     # Add scaled bands to the original image
     return image.addBands(optical_bands, None, True).addBands(thermal_bands, None, True)
 
+
 # Function to Mask Clouds and Cloud Shadows in Landsat 8 Imagery
 def cloud_mask(image):
     # Define cloud shadow and cloud bitmasks (Bits 3 and 5)

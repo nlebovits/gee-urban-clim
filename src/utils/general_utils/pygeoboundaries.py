@@ -3,9 +3,10 @@ from typing import List, Union
 import ee
 import geojson
 import requests
-from data_utils import countries_iso_dict, iso_codes
 from fuzzywuzzy import process
 from requests_cache import CachedSession
+
+from src.utils.general_utils import countries_iso_dict, iso_codes
 
 
 class SessionManager:

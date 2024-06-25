@@ -1,18 +1,20 @@
+import csv
+import os
+from collections import Counter
+from datetime import datetime
+from io import StringIO
+
 import ee
 import geemap
-from utils.general_utils.monitor_ee_tasks import monitor_tasks
-from utils.general_utils.pygeoboundaries import get_adm_ee
-from utils.general_utils.monitor_ee_tasks import start_export_task
-from google.cloud import storage
-from datetime import datetime
-import csv
-from io import StringIO
-from collections import Counter
 import pretty_errors
-import os
 from dotenv import load_dotenv
+from google.cloud import storage
 
-from config import HEAT_SCALE
+from src.config.config import HEAT_SCALE, TRAINING_DATA_COUNTRIES
+from src.utils.general_utils.data_exists import data_exists
+from src.utils.general_utils.monitor_ee_tasks import (monitor_tasks,
+                                                      start_export_task)
+from src.utils.general_utils.pygeoboundaries import get_adm_ee
 
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -23,82 +25,7 @@ GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
 
 
-training_data_countries = ["Costa Rica", "Netherlands"]
-
-
-# Check if data for a country exists; if it does, skip with message; if not, proceed
-def data_exists(bucket_name, prefix):
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blobs = list(bucket.list_blobs(prefix=prefix))
-    return len(blobs) > 0
-
-
-def process_heat_data(place_name):
-    cloud_project = GOOGLE_CLOUD_PROJECT
-    ee.Initialize(project=cloud_project)
-    current_year = datetime.now().year
-    years = range(current_year - 6, current_year - 1)
-    scale = HEAT_SCALE
-    snake_case_place_name = place_name.replace(" ", "_").lower()
-    aoi = get_adm_ee(territories=place_name, adm="ADM0")
-    bbox = aoi.geometry().bounds()
-    bucket_name = GOOGLE_CLOUD_BUCKET
-    directory_name = f"heat_data/{snake_case_place_name}/inputs/"
-
-    if data_exists(bucket_name, directory_name):
-        print(f"Data for {place_name} already exists. Skipping...")
-        return
-    else:
-        print(f"Starting to generate data for {place_name}...")
-
-    def process_for_year(year, cloud_project, bucket_name, snake_case_place_name):
-        ndvi_min, ndvi_max = download_ndvi_data_for_year(
-            year, cloud_project, bucket_name, snake_case_place_name
-        )
-        image_collection = process_year(year, bbox, ndvi_min, ndvi_max)
-        return image_collection
-
-    for year in years:
-        export_ndvi_min_max(year, bbox, scale, bucket_name, snake_case_place_name)
-
-    image_list = []
-
-    for year in years:
-        image = process_for_year(
-            year, cloud_project, bucket_name, snake_case_place_name
-        )
-        image_list.append(image)
-
-    for i, image in enumerate(image_list):
-        year = years[i]
-        task = ee.batch.Export.image.toCloudStorage(
-            image=image,
-            description=f"{snake_case_place_name}_heat_{year}",
-            bucket=bucket_name,
-            fileNamePrefix=f"{directory_name}{year}/heat_{year}",
-            scale=scale,
-            region=bbox.getInfo()["coordinates"],
-        )
-        task.start()
-        print(f"Exporting heat data for {place_name} for the year {year} to GCS...")
-
-    monitor_tasks()
-
-
-def main(training_data_countries):
-
-    print("Generating data for the following countries:")
-    print(", ".join(training_data_countries))
-
-    for place_name in training_data_countries:
-        process_heat_data(place_name)
-
-    print("Data generation completed.")
-
-
-if __name__ == "__main__":
-    main()
+training_data_countries = TRAINING_DATA_COUNTRIES
 
 
 def process_year(year, bbox, ndvi_min, ndvi_max):
@@ -177,6 +104,11 @@ def download_ndvi_data_for_year(
 def export_ndvi_min_max(
     year, bbox, scale, gcs_bucket, snake_case_place_name, file_prefix="ndvi_min_max"
 ):
+    file_path_prefix = f"data/{snake_case_place_name}/inputs/{file_prefix}_{year}"
+    if data_exists(gcs_bucket, file_path_prefix):
+        print(f"File for {year} already exists. Skipping export.")
+        return None
+
     try:
         startDate = ee.Date.fromYMD(year, 1, 1)
         endDate = ee.Date.fromYMD(year, 12, 31)
@@ -207,7 +139,7 @@ def export_ndvi_min_max(
             collection=ee.FeatureCollection([feature]),
             description=f"{file_prefix}_{year}",
             bucket=gcs_bucket,
-            fileNamePrefix=f"data/{snake_case_place_name}/inputs/{file_prefix}_{year}",
+            fileNamePrefix=file_path_prefix,
             fileFormat="CSV",
         )
         task.start()
@@ -234,3 +166,81 @@ def cloud_mask(image):
         .And(qa.bitwiseAnd(cloud_bitmask).eq(0))
     )
     return image.updateMask(mask)
+
+
+def process_heat_data(place_name):
+    cloud_project = GOOGLE_CLOUD_PROJECT
+    ee.Initialize(project=cloud_project)
+    current_year = datetime.now().year
+    years = range(current_year - 6, current_year - 1)
+    scale = HEAT_SCALE
+    snake_case_place_name = place_name.replace(" ", "_").lower()
+    aoi = get_adm_ee(territories=place_name, adm="ADM0")
+    bbox = aoi.geometry().bounds()
+    bucket_name = GOOGLE_CLOUD_BUCKET
+    directory_name = f"heat_data/{snake_case_place_name}/inputs/"
+
+    if data_exists(bucket_name, directory_name):
+        print(f"Data for {place_name} already exists. Skipping...")
+        return
+    else:
+        print(f"Starting to generate data for {place_name}...")
+
+    def process_for_year(year, cloud_project, bucket_name, snake_case_place_name):
+        ndvi_min, ndvi_max = download_ndvi_data_for_year(
+            year, cloud_project, bucket_name, snake_case_place_name
+        )
+        image_collection = process_year(year, bbox, ndvi_min, ndvi_max)
+        return image_collection
+
+    ndvi_tasks = []
+    for year in years:
+        task = export_ndvi_min_max(
+            year, bbox, scale, bucket_name, snake_case_place_name
+        )
+        if task is not None:
+            ndvi_tasks.append(task)
+
+    monitor_tasks(ndvi_tasks)
+
+    image_list = []
+
+    tasks = []
+
+    for year in years:
+        image = process_for_year(
+            year, cloud_project, bucket_name, snake_case_place_name
+        )
+        image_list.append(image)
+
+    for i, image in enumerate(image_list):
+        year = years[i]
+        task = ee.batch.Export.image.toCloudStorage(
+            image=image,
+            description=f"{snake_case_place_name}_heat_{year}",
+            bucket=bucket_name,
+            fileNamePrefix=f"{directory_name}{year}/heat_{year}",
+            scale=scale,
+            region=bbox.getInfo()["coordinates"],
+        )
+        task.start()
+        # Add the task to the tasks list
+        tasks.append(task)
+        print(f"Exporting heat data for {place_name} for the year {year} to GCS...")
+
+    monitor_tasks(tasks, 60)
+
+
+def main(training_data_countries):
+
+    print("Generating data for the following countries:")
+    print(", ".join(training_data_countries))
+
+    for place_name in training_data_countries:
+        process_heat_data(place_name)
+
+    print("Data generation completed.")
+
+
+if __name__ == "__main__":
+    main(training_data_countries)

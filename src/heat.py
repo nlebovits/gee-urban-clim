@@ -22,6 +22,7 @@
 
 ## use the model to predict for our given study area; save the results to GCP
 
+# note also that we want to be able to predict at any geography level; we collect training data at the national level, but once the model is trained, we should be able to predict at any ADM unit
 
 # CONSTS to define in the .env file:
 
@@ -34,32 +35,65 @@
 
 ### -------------
 
-import argparse
-import ee
-from data_utils.process_heat_data import process_heat_data
+import os
+from dotenv import load_dotenv
+from make_training_data_NEW import process_heat_data, data_exists
+from google.cloud import storage
+
+# Load environment variables
+load_dotenv()
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
+GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 
 
-def main(countries):
-    cloud_project = "hotspotstoplight"
-    ee.Initialize(project=cloud_project)
+def main():
+    place_names = ["Country1", "Country2", "Country3"]
+    print("Generating data for the following countries:")
+    print(", ".join(place_names))
 
-    for place_name in countries:
-        print("Processing data for", place_name, "...")
-        process_heat_data(place_name)
+    for place_name in place_names:
+        if data_exists(
+            GOOGLE_CLOUD_BUCKET,
+            f"heat_data/{place_name.replace(' ', '_').lower()}/inputs/",
+        ):
+            print(f"Data for {place_name} already exists. Skipping...")
+        else:
+            print(f"Starting to generate data for {place_name}...")
+            process_heat_data(place_name, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
+
+    print("Data generation completed.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Process heat data for given countries."
-    )
-    parser.add_argument(
-        "countries",
-        metavar="Country",
-        type=str,
-        nargs="+",
-        help="A list of countries to process",
-    )
+    main()
 
-    args = parser.parse_args()
 
-    main(args.countries)
+# import argparse
+# import ee
+# from data_utils.process_heat_data import process_heat_data
+
+
+# def main(countries):
+#     cloud_project = "hotspotstoplight"
+#     ee.Initialize(project=cloud_project)
+
+#     for place_name in countries:
+#         print("Processing data for", place_name, "...")
+#         process_heat_data(place_name)
+
+
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser(
+#         description="Process heat data for given countries."
+#     )
+#     parser.add_argument(
+#         "countries",
+#         metavar="Country",
+#         type=str,
+#         nargs="+",
+#         help="A list of countries to process",
+#     )
+
+#     args = parser.parse_args()
+
+#     main(args.countries)

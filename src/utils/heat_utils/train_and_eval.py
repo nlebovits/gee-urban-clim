@@ -1,3 +1,6 @@
+image_collections = ee.ImageCollection.fromImages(image_list)
+
+
 def convert_landcover_to_int(image):
     # Convert the 'landcover' band to integer.
     landcover_int = image.select("landcover").toInt()

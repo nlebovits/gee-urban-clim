@@ -8,3 +8,11 @@ GOOGLE_CLOUD_PROJECT=your-project-name
 GOOGLE_CLOUD_BUCKET=your-bucket-name
 GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
 ```
+
+4) make sure that, for your chosen project, GEE API is enabled and the project is registered for GEE usage
+5) run `earthengine authenciate`
+
+May have to do this:
+In order to use Earth Engine scripts, you must authenticate. From the home page open a local terminal and enter
+
+earthengine authenticate

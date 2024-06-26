@@ -1,6 +1,8 @@
 import argparse
 
-from .utils import make_training_data, predict, train_and_evaluate
+from .utils import generate_and_export_training_data as make_training_data
+from .utils import predict
+from .utils import process_all_flood_data as train_and_evaluate
 
 
 def main(place_name):

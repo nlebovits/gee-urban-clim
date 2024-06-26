@@ -416,7 +416,3 @@ def generate_and_export_training_data():
                 tasks.append(task)
 
         monitor_tasks(tasks, 600)
-
-
-if __name__ == "__main__":
-    generate_and_export_training_data()

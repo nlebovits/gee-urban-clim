@@ -18,7 +18,7 @@ from src.config.config import (
     TRAINING_DATA_COUNTRIES,
     FLOOD_MODEL_ASSET_ID,
 )
-from src.constants.constants import LANDCOVER_SCALE, FLOOD_SCALE
+from src.constants.constants import LANDCOVER_SCALE, FLOOD_SCALE, FLOOD_INPUT_PROPERTIES
 from src.utils.general_utils.data_exists import data_exists
 from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
 from src.utils.general_utils.pygeoboundaries import get_adm_ee
@@ -38,6 +38,7 @@ file_name = EMDAT_DATA_PATH
 
 ee.Initialize(project=cloud_project)
 
+input_properties = FLOOD_INPUT_PROPERTIES
 samples_per_flood_class = 50000
 
 
@@ -192,10 +193,6 @@ def train_and_evaluate_classifier(
     try:
         samples_per_image = int(samples_per_flood_class // n)
         print(f"Samples per flood class per image: {samples_per_image}")
-        input_properties = image_collection.first().bandNames().remove("flooded_mask")
-        if not input_properties:
-            print("Error: No input properties after removing 'flooded_mask'.")
-            return None, None
 
         landcover = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(bbox)
         sample = landcover.sample(
@@ -365,8 +362,19 @@ def train_and_evaluate_classifier(
             f"data/{snake_case_place_name}/outputs/validation_results",
         )
 
+        print("Training probability predictor...")
+        prob_classifier = (
+            ee.Classifier.smileRandomForest(10)
+            .setOutputMode("PROBABILITY")
+            .train(
+                features=training_samples,
+                classProperty="flooded_mask",
+                inputProperties=input_properties,
+            )
+        )
+
         print("Training and evaluation process completed.")
-        return classifier, test_accuracy, validation_accuracy
+        return prob_classifier, test_accuracy, validation_accuracy
     except Exception as e:
         print(f"Unexpected error: {e}")
         return None, None
@@ -452,10 +460,10 @@ def process_all_flood_data():
     aoi = get_adm_ee(territories=training_data_countries, adm="ADM0")
     bbox = aoi.geometry().bounds()
 
-    classifier, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
+    prob_classifier, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
         combined_image_collection, bbox, bucket_name, "combined_model"
     )
-    if classifier is None:
+    if prob_classifier is None:
         print("Training and evaluation failed outright. Exiting...")
         return
 
@@ -468,15 +476,7 @@ def process_all_flood_data():
         print(f"Exporting trained flood model with GEE ID {asset_id}.")
         return task
 
-    task = export_model_as_ee_asset(classifier, FLOOD_MODEL_ASSET_ID)
+    task = export_model_as_ee_asset(prob_classifier, FLOOD_MODEL_ASSET_ID)
     monitor_tasks([task], 60)
 
     print("Process completed successfully.")
-
-
-def main():
-    process_all_flood_data()
-
-
-if __name__ == "__main__":
-    main()

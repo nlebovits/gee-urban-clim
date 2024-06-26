@@ -1,3 +1,5 @@
+LANDCOVER_SCALE = 10
+
 HEAT_SCALE = 90
 
 HEAT_INPUT_PROPERTIES = ["longitude", "latitude", "landcover", "elevation"]

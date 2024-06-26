@@ -1,17 +1,47 @@
-import io
+import csv
+import os
+from collections import Counter
 from datetime import datetime, timedelta
+from io import BytesIO
 
-import ee
 import pandas as pd
+import ee
+import geemap
+import pretty_errors
+from dotenv import load_dotenv
 from google.cloud import storage
 
-training_countries = ["Costa Rica"]
+from src.config.config import (
+    TRAINING_DATA_COUNTRIES,
+    EMDAT_DATA_PATH,
+)
+
+from src.constants.constants import FLOOD_SCALE
+
+from src.utils.general_utils.data_exists import data_exists
+from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
+from src.utils.general_utils.pygeoboundaries import get_adm_ee
+
+load_dotenv()
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
+GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+# Set the environment variable for Google Application Credentials
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
+
+training_data_countries = TRAINING_DATA_COUNTRIES
+cloud_project = GOOGLE_CLOUD_PROJECT
+bucket_name = GOOGLE_CLOUD_BUCKET
+file_name = EMDAT_DATA_PATH
+
+ee.Initialize(project=cloud_project)
 
 
 def filter_data_from_gcs(country_name):
     """
     Pulls data from an Excel file in a Google Cloud Storage bucket,
-    filters it based on a specified country name (case-insensitive),
+    filters it based on a specified country name (case-insensitive) and years >= 2016,
     and returns the filtered data.
 
     Parameters:
@@ -20,11 +50,8 @@ def filter_data_from_gcs(country_name):
     Returns:
     - A list of tuples with the start and end dates for the filtered rows
     """
-    bucket_name = "hotspotstoplight_floodmapping"
-    file_name = "data/emdat/public_emdat_custom_request_2024-02-10_39ba89ea-de1d-4020-9b8e-027db50a5ded.xlsx"
-
     # Initialize a client and get the bucket and blob
-    client = storage.Client()
+    client = storage.Client(project=cloud_project)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(file_name)
 
@@ -32,7 +59,7 @@ def filter_data_from_gcs(country_name):
     content = blob.download_as_bytes()
 
     # Read the Excel file into a DataFrame
-    excel_data = pd.read_excel(io.BytesIO(content), engine="openpyxl")
+    excel_data = pd.read_excel(BytesIO(content), engine="openpyxl")
 
     # Filter the DataFrame based on the 'Country' column, case-insensitive
     filtered_data = excel_data[
@@ -67,6 +94,9 @@ def filter_data_from_gcs(country_name):
 
     # Filter out rows where either start_date or end_date are NaT
     valid_data = filtered_data.dropna(subset=["start_date", "end_date"])
+
+    # Further filter rows to include only those with start year >= 2016
+    valid_data = valid_data[valid_data["Start Year"] >= 2016]
 
     # Create date pairs as a list of tuples
     date_pairs = [
@@ -297,22 +327,101 @@ def make_training_data(bbox, start_date, end_date):
     # Now flood_labeled_image contains 1 for flooded areas and 0 for non-flooded areas
 
     combined = (
-        dem.rename("elevation")
-        .addBands(landcover.select("Map").rename("landcover"))
+        dem.toFloat()
+        .rename("elevation")
+        .addBands(landcover.select("Map").toFloat().rename("landcover"))
         .addBands(slope)
-        .addBands(ghsl)
-        .addBands(flow_direction.rename("flow_direction"))
-        .addBands(stream_dist_proximity)
-        .addBands(flood_labeled_image.rename("flooded_mask"))
+        .addBands(flow_direction.toFloat().rename("flow_direction"))
+        .addBands(stream_dist_proximity.toFloat())
         .addBands(flow_accumulation)
-        .addBands(spi)
-        .addBands(sti)
-        .addBands(cti)
+        .addBands(spi.toFloat())
+        .addBands(sti.toFloat())
+        .addBands(cti.toFloat())
         .addBands(tpi)
         .addBands(tri)
         .addBands(pcurv)
         .addBands(tcurv)
         .addBands(aspect)
+        .addBands(flood_labeled_image.toFloat().rename("flooded_mask"))
     )
 
+    # # Assuming 'combined' is an ee.Image
+    # image_info = combined.getInfo()
+
+    # # Print band names directly
+    # print("Sampling image band names:", combined.bandNames().getInfo())
+
+    # # Iterate through bands to print names and types
+    # print("Band names and types:")
+    # for band in image_info["bands"]:
+    #     print(f"Band name: {band['id']}, Type: {band['data_type']['precision']}")
+
     return combined
+
+
+def generate_and_export_training_data():
+    for country in training_data_countries:
+
+        print(f"Generating flood training data for {country}...")
+
+        snake_case_place_name = country.replace(" ", "_").lower()
+
+        # Check if flood training data already exists
+        prefix = f"data/{snake_case_place_name}/inputs/flood_training_data_"
+        if data_exists(bucket_name, prefix):
+            print(f"Flood training data already exists for {country}. Skipping...")
+            continue
+
+        # Get bounding box and filter data
+        aoi = get_adm_ee(territories=country, adm="ADM0")
+        bbox = aoi.geometry().bounds()
+        date_pairs = filter_data_from_gcs(country)
+
+        # Prepare date pairs for processing
+        flood_dates = [
+            (
+                datetime.strptime(start, "%Y-%m-%d").date(),
+                datetime.strptime(end, "%Y-%m-%d").date(),
+            )
+            for start, end in date_pairs
+        ]
+
+        # Define Google Cloud Storage bucket name and fileNamePrefix
+        directory_name = f"data/{snake_case_place_name}/inputs/"
+
+        # Initialize Google Cloud Storage client and create the new directory
+        storage_client = storage.Client(project=cloud_project)
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(
+            directory_name
+        )  # This creates a 'directory' by specifying a blob that ends with '/'
+        blob.upload_from_string(
+            "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
+        )  # Create the directory
+
+        tasks = []
+
+        # Generate training data for each flood date range
+        for start_date, end_date in flood_dates:
+            combined = make_training_data(bbox, start_date, end_date)
+            if combined:
+                file_name = (
+                    f"{directory_name}flood_training_data_{start_date}_{end_date}.tif"
+                )
+                task = ee.batch.Export.image.toCloudStorage(
+                    image=combined,
+                    description=f"{snake_case_place_name}_flood_training_data_{start_date}_{end_date}",
+                    bucket=bucket_name,
+                    fileNamePrefix=file_name,
+                    scale=FLOOD_SCALE,
+                    region=bbox,
+                    maxPixels=1e12,
+                )
+                task.start()
+                tasks.append(task)
+
+        monitor_tasks(tasks, 600)
+
+
+if __name__ == "__main__":
+    generate_and_export_training_data()

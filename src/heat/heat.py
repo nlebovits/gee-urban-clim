@@ -1,15 +1,10 @@
 import argparse
-from src.utils.heat_utils.make_training_data import make_training_data
-from src.utils.heat_utils.train_and_eval import train_and_evaluate
-from src.utils.heat_utils.predict import predict
+from .utils import make_training_data, train_and_evaluate, predict
 
 
 def main(place_name):
-
     make_training_data()
-
     train_and_evaluate()
-
     print(f"Predicting for {place_name}...")
     predict(place_name)
     print(f"Prediction for {place_name} completed.")

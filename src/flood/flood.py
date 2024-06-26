@@ -1,5 +1,6 @@
 import argparse
-from .utils import make_training_data, train_and_evaluate, predict
+
+from .utils import make_training_data, predict, train_and_evaluate
 
 
 def main(place_name):

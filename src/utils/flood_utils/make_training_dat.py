@@ -4,20 +4,15 @@ from collections import Counter
 from datetime import datetime, timedelta
 from io import BytesIO
 
-import pandas as pd
 import ee
 import geemap
+import pandas as pd
 import pretty_errors
 from dotenv import load_dotenv
 from google.cloud import storage
 
-from src.config.config import (
-    TRAINING_DATA_COUNTRIES,
-    EMDAT_DATA_PATH,
-)
-
+from src.config.config import EMDAT_DATA_PATH, TRAINING_DATA_COUNTRIES
 from src.constants.constants import FLOOD_SCALE
-
 from src.utils.general_utils.data_exists import data_exists
 from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
 from src.utils.general_utils.pygeoboundaries import get_adm_ee

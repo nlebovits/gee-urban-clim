@@ -10,16 +10,8 @@ import pretty_errors
 from dotenv import load_dotenv
 from google.cloud import storage
 
-from src.config.config import (
-    HEAT_MODEL_ASSET_ID,
-    TRAINING_DATA_COUNTRIES,
-)
-
-from src.constants.constants import (
-    HEAT_INPUT_PROPERTIES,
-    HEAT_SCALE,
-)
-
+from src.config.config import HEAT_MODEL_ASSET_ID, TRAINING_DATA_COUNTRIES
+from src.constants.constants import HEAT_INPUT_PROPERTIES, HEAT_SCALE
 from src.utils.general_utils.data_exists import data_exists
 from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
 from src.utils.general_utils.pygeoboundaries import get_adm_ee

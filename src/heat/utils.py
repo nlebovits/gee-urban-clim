@@ -11,11 +11,15 @@ from dotenv import load_dotenv
 from google.cloud import storage
 
 from src.config.config import (
-    HEAT_INPUT_PROPERTIES,
     HEAT_MODEL_ASSET_ID,
-    HEAT_SCALE,
     TRAINING_DATA_COUNTRIES,
 )
+
+from src.constants.constants import (
+    HEAT_INPUT_PROPERTIES,
+    HEAT_SCALE,
+)
+
 from src.utils.general_utils.data_exists import data_exists
 from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
 from src.utils.general_utils.pygeoboundaries import get_adm_ee
@@ -177,8 +181,7 @@ def cloud_mask(image):
 
 
 def process_heat_data(place_name):
-    cloud_project = GOOGLE_CLOUD_PROJECT
-    ee.Initialize(project=cloud_project)
+
     current_year = datetime.now().year
     years = range(current_year - 6, current_year - 1)
     scale = HEAT_SCALE

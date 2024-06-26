@@ -1,7 +1,7 @@
 import argparse
 
-from flood.flood import main as flood_main
-from heat.heat import main as heat_main
+from src.flood.flood import main as flood_main
+from src.heat.heat import main as heat_main
 
 
 def main(place_name):

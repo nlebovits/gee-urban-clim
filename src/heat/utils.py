@@ -24,17 +24,10 @@ from src.utils.general_utils.pygeoboundaries import get_adm_ee
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-# Set the environment variable for Google Application Credentials
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
+GOOGLE_CLOUD_BUCKET = GOOGLE_CLOUD_BUCKET
 
-
-training_data_countries = TRAINING_DATA_COUNTRIES
-cloud_project = GOOGLE_CLOUD_PROJECT
-bucket_name = GOOGLE_CLOUD_BUCKET
-
-ee.Initialize(project=cloud_project)
+ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
 
 
 def process_year(year, bbox, ndvi_min, ndvi_max):
@@ -96,10 +89,10 @@ def process_year(year, bbox, ndvi_min, ndvi_max):
 
 
 def download_ndvi_data_for_year(
-    year, cloud_project, bucket_name, snake_case_place_name
+    year, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET, snake_case_place_name
 ):
-    storage_client = storage.Client(project=cloud_project)
-    bucket = storage_client.bucket(bucket_name)
+    storage_client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
+    bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
     blob_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/ndvi_min_max_{year}.csv"
     blob = bucket.blob(blob_name)
     ndvi_data_csv = blob.download_as_string()
@@ -185,7 +178,6 @@ def process_heat_data(place_name):
     snake_case_place_name = place_name.replace(" ", "_").lower()
     aoi = get_adm_ee(territories=place_name, adm="ADM0")
     bbox = aoi.geometry().bounds()
-    bucket_name = GOOGLE_CLOUD_BUCKET
     directory_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/"
 
     if data_exists(bucket_name, directory_name):
@@ -194,9 +186,11 @@ def process_heat_data(place_name):
     else:
         print(f"Starting to generate data for {place_name}...")
 
-    def process_for_year(year, cloud_project, bucket_name, snake_case_place_name):
+    def process_for_year(
+        year, GOOGLE_CLOUD_PROJECT, bucket_name, snake_case_place_name
+    ):
         ndvi_min, ndvi_max = download_ndvi_data_for_year(
-            year, cloud_project, bucket_name, snake_case_place_name
+            year, GOOGLE_CLOUD_PROJECT, bucket_name, snake_case_place_name
         )
         image_collection = process_year(year, bbox, ndvi_min, ndvi_max)
         return image_collection
@@ -217,7 +211,7 @@ def process_heat_data(place_name):
 
     for year in years:
         image = process_for_year(
-            year, cloud_project, bucket_name, snake_case_place_name
+            year, GOOGLE_CLOUD_PROJECT, bucket_name, snake_case_place_name
         )
         image_list.append(image)
 
@@ -242,26 +236,26 @@ def process_heat_data(place_name):
 def make_training_data():
 
     print("Generating heat risk training data from the following countries:")
-    print(", ".join(training_data_countries))
+    print(", ".join(TRAINING_DATA_COUNTRIES))
 
-    for place_name in training_data_countries:
+    for place_name in TRAINING_DATA_COUNTRIES:
         process_heat_data(place_name)
 
     print("Data generation completed.")
 
 
 def list_blobs_with_prefix(bucket_name, prefix):
-    storage_client = storage.Client(project=cloud_project)
+    storage_client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
     bucket = storage_client.bucket(bucket_name)
     return list(bucket.list_blobs(prefix=prefix))
 
 
-def read_data_to_image_collection(training_data_countries):
+def read_data_to_image_collection(TRAINING_DATA_COUNTRIES):
     bucket_name = GOOGLE_CLOUD_BUCKET
     all_tif_list = []
 
     # Check for data existence and collect URIs
-    for country in training_data_countries:
+    for country in TRAINING_DATA_COUNTRIES:
         snake_case_place_name = country.replace(" ", "_").lower()
         directory_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/"
 
@@ -314,7 +308,7 @@ def train_and_evaluate():
         return
 
     print("Reading data to image collection...")
-    image_collection = read_data_to_image_collection(training_data_countries)
+    image_collection = read_data_to_image_collection(TRAINING_DATA_COUNTRIES)
 
     if image_collection is None:
         print("No image collection to process.")

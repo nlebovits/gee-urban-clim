@@ -33,19 +33,9 @@ from src.utils.general_utils.pygeoboundaries import get_adm_ee
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
+ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
 
-training_data_countries = TRAINING_DATA_COUNTRIES
-cloud_project = GOOGLE_CLOUD_PROJECT
-bucket_name = GOOGLE_CLOUD_BUCKET
-file_name = EMDAT_DATA_PATH
-
-ee.Initialize(project=cloud_project)
-
-
-input_properties = FLOOD_INPUT_PROPERTIES
 samples_per_flood_class = 50000
 
 
@@ -62,9 +52,9 @@ def filter_data_from_gcs(country_name):
     - A list of tuples with the start and end dates for the filtered rows
     """
 
-    client = storage.Client(project=cloud_project)
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(file_name)
+    client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
+    bucket = client.bucket(GOOGLE_CLOUD_BUCKET)
+    blob = bucket.blob(EMDAT_DATA_PATH)
 
     content = blob.download_as_bytes()
 
@@ -112,9 +102,6 @@ def filter_data_from_gcs(country_name):
 
 def make_training_data(bbox, start_date, end_date):
 
-    start_date = start_date
-    end_date = end_date
-
     before_start = (start_date - timedelta(days=10)).strftime("%Y-%m-%d")
     before_end = start_date.strftime("%Y-%m-%d")
 
@@ -131,7 +118,6 @@ def make_training_data(bbox, start_date, end_date):
     slope = ee.Terrain.slope(dem)
     landcover = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(bbox)
     flow_direction = ee.Image("WWF/HydroSHEDS/03DIR").clip(bbox)
-    ghsl = ee.Image("JRC/GHSL/P2023A/GHS_BUILT_C/2018").clip(bbox)
 
     stream_dist_proximity_collection = (
         ee.ImageCollection(
@@ -346,7 +332,7 @@ def make_training_data(bbox, start_date, end_date):
 
 
 def generate_and_export_training_data():
-    for country in training_data_countries:
+    for country in TRAINING_DATA_COUNTRIES:
 
         print(f"Generating flood training data for {country}...")
 
@@ -356,7 +342,7 @@ def generate_and_export_training_data():
         base_directory = f"{FLOOD_INPUTS_PATH}{snake_case_place_name}/"
 
         # Check if flood training data already exists
-        if data_exists(bucket_name, f"{base_directory}flood_training_data_"):
+        if data_exists(GOOGLE_CLOUD_BUCKET, f"{base_directory}flood_training_data_"):
             print(f"Flood training data already exists for {country}. Skipping...")
             continue
 
@@ -375,8 +361,8 @@ def generate_and_export_training_data():
         ]
 
         # Initialize Google Cloud Storage client and create the new directory
-        storage_client = storage.Client(project=cloud_project)
-        bucket = storage_client.bucket(bucket_name)
+        storage_client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
+        bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
         blob = bucket.blob(base_directory)
         blob.upload_from_string(
             "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
@@ -394,7 +380,7 @@ def generate_and_export_training_data():
                 task = ee.batch.Export.image.toCloudStorage(
                     image=combined,
                     description=f"{snake_case_place_name}_flood_training_data_{start_date}_{end_date}",
-                    bucket=bucket_name,
+                    bucket=GOOGLE_CLOUD_BUCKET,
                     fileNamePrefix=file_name,
                     scale=FLOOD_SCALE,
                     region=bbox,
@@ -452,19 +438,19 @@ def aggregate_samples(
     return all_samples
 
 
-def export_samples_to_gcs(samples, bucket_name, filename):
+def export_samples_to_gcs(samples, GOOGLE_CLOUD_BUCKET, filename):
     """Export samples to Google Cloud Storage as GeoJSON."""
     try:
         task = ee.batch.Export.table.toCloudStorage(
             collection=samples,
             description="ExportToGCS",
-            bucket=bucket_name,
+            bucket=GOOGLE_CLOUD_BUCKET,
             fileNamePrefix=filename,
             fileFormat="GeoJSON",
         )
         task.start()
         print(
-            f"Export task {task.id} started, exporting samples to gs://{bucket_name}/{filename}"
+            f"Export task {task.id} started, exporting samples to gs://{GOOGLE_CLOUD_BUCKET}/{filename}"
         )
         return task
     except Exception as e:
@@ -480,11 +466,11 @@ def clean_geometry(geojson):
     return geojson
 
 
-def read_geojson_from_gcs(bucket_name, filename):
+def read_geojson_from_gcs(GOOGLE_CLOUD_BUCKET, filename):
     """Read GeoJSON file from GCS, parse, clean, and convert into ee.FeatureCollection."""
 
     storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
+    bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
     blob = bucket.blob(filename)
     geojson_string = blob.download_as_text()
 
@@ -517,7 +503,7 @@ def calculate_rates(confusion_matrix):
 
 
 def export_results_to_cloud_storage(
-    accuracyMatrix, description, bucket_name, filePrefix
+    accuracyMatrix, description, GOOGLE_CLOUD_BUCKET, filePrefix
 ):
     """Export the error matrix to Google Cloud Storage directly."""
     # Convert the errorMatrix to a feature
@@ -530,18 +516,18 @@ def export_results_to_cloud_storage(
     task = ee.batch.Export.table.toCloudStorage(
         collection=errorMatrixCollection,
         description=description,
-        bucket=bucket_name,
+        bucket=GOOGLE_CLOUD_BUCKET,
         fileNamePrefix=f"{filePrefix}",
         fileFormat="CSV",
     )
     task.start()
     print(
-        f"Export task {task.id} started, exporting results to gs://{bucket_name}/{filePrefix}/{description}.csv"
+        f"Export task {task.id} started, exporting results to gs://{GOOGLE_CLOUD_BUCKET}/{filePrefix}/{description}.csv"
     )
 
 
 def train_and_evaluate_classifier(
-    image_collection, bbox, bucket_name, snake_case_place_name
+    image_collection, bbox, GOOGLE_CLOUD_BUCKET, snake_case_place_name
 ):
     print("Starting training and evaluation process...")
     if not isinstance(image_collection, ee.ImageCollection):
@@ -671,7 +657,7 @@ def train_and_evaluate_classifier(
         classifier = ee.Classifier.smileRandomForest(10).train(
             features=training_samples,
             classProperty="flooded_mask",
-            inputProperties=input_properties,
+            inputProperties=FLOOD_INPUT_PROPERTIES,
         )
 
         print("Evaluating the classifier...")
@@ -690,13 +676,13 @@ def train_and_evaluate_classifier(
         export_results_to_cloud_storage(
             test_accuracy,
             "Testing",
-            bucket_name,
+            GOOGLE_CLOUD_BUCKET,
             f"{base_directory}testing_results",
         )
         export_results_to_cloud_storage(
             validation_accuracy,
             "Validation",
-            bucket_name,
+            GOOGLE_CLOUD_BUCKET,
             f"{base_directory}validation_results",
         )
 
@@ -707,7 +693,7 @@ def train_and_evaluate_classifier(
             .train(
                 features=training_samples,
                 classProperty="flooded_mask",
-                inputProperties=input_properties,
+                inputProperties=FLOOD_INPUT_PROPERTIES,
             )
         )
 
@@ -718,20 +704,20 @@ def train_and_evaluate_classifier(
         return None, None
 
 
-def list_gcs_files(bucket_name, prefix):
+def list_gcs_files(GOOGLE_CLOUD_BUCKET, prefix):
     """List all files in a GCS bucket folder."""
     storage_client = storage.Client()
-    blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
+    blobs = storage_client.list_blobs(GOOGLE_CLOUD_BUCKET, prefix=prefix)
     return [
-        f"gs://{bucket_name}/{blob.name}"
+        f"gs://{GOOGLE_CLOUD_BUCKET}/{blob.name}"
         for blob in blobs
         if blob.name.endswith(".tif")
     ]
 
 
-def read_images_into_collection(bucket_name, prefix):
+def read_images_into_collection(GOOGLE_CLOUD_BUCKET, prefix):
     """Read images from cloud bucket into an Earth Engine image collection."""
-    tif_list = list_gcs_files(bucket_name, prefix)
+    tif_list = list_gcs_files(GOOGLE_CLOUD_BUCKET, prefix)
     ee_image_list = [ee.Image.loadGeoTIFF(url) for url in tif_list]
     image_collection = ee.ImageCollection.fromImages(ee_image_list)
 
@@ -767,19 +753,19 @@ def process_all_flood_data():
 
     combined_image_collection = ee.ImageCollection([])
 
-    for country in training_data_countries:
+    for country in TRAINING_DATA_COUNTRIES:
         print(f"Processing flood data for {country}...")
 
         snake_case_place_name = country.replace(" ", "_").lower()
-        directory_name = f"data/{snake_case_place_name}/inputs/"
+        directory_name = f"{FLOOD_INPUTS_PATH}{snake_case_place_name}/"
 
-        if not data_exists(bucket_name, directory_name):
+        if not data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
             print(f"No training data found for {country}. Skipping...")
             continue
 
         print(f"Reading images for {country} into collection...")
         country_image_collection = read_images_into_collection(
-            bucket_name, directory_name
+            GOOGLE_CLOUD_BUCKET, directory_name
         )
         if country_image_collection.size().getInfo() == 0:
             print(f"No images found for {country}. Skipping...")
@@ -795,11 +781,11 @@ def process_all_flood_data():
 
     print("Training and assessing model on combined data...")
 
-    aoi = get_adm_ee(territories=training_data_countries, adm="ADM0")
+    aoi = get_adm_ee(territories=TRAINING_DATA_COUNTRIES, adm="ADM0")
     bbox = aoi.geometry().bounds()
 
     prob_classifier, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
-        combined_image_collection, bbox, bucket_name, "combined_model"
+        combined_image_collection, bbox, GOOGLE_CLOUD_BUCKET, "combined_model"
     )
     if prob_classifier is None:
         print("Training and evaluation failed outright. Exiting...")
@@ -831,7 +817,6 @@ def process_data_to_classify(bbox):
     slope = ee.Terrain.slope(dem)
     landcover = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(bbox)
     flow_direction = ee.Image("WWF/HydroSHEDS/03DIR").clip(bbox)
-    ghsl = ee.Image("JRC/GHSL/P2023A/GHS_BUILT_C/2018").clip(bbox)
 
     stream_dist_proximity_collection = (
         ee.ImageCollection(
@@ -934,16 +919,16 @@ def process_data_to_classify(bbox):
     return image_to_classify
 
 
-def classify_image(image_to_classify, input_properties, model_asset_id):
+def classify_image(image_to_classify, FLOOD_INPUT_PROPERTIES, model_asset_id):
     """Classify the image using the pre-trained model."""
     regressor = ee.Classifier.load(model_asset_id)
-    return image_to_classify.select(input_properties).classify(regressor)
+    return image_to_classify.select(FLOOD_INPUT_PROPERTIES).classify(regressor)
 
 
-def initialize_storage_client(project, bucket_name):
+def initialize_storage_client(project, GOOGLE_CLOUD_BUCKET):
     """Initialize the Google Cloud Storage client."""
     storage_client = storage.Client(project=project)
-    bucket = storage_client.bucket(bucket_name)
+    bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
     return bucket
 
 

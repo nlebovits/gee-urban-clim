@@ -19,7 +19,13 @@ from src.config.config import (
     FLOOD_MODEL_ASSET_ID,
     TRAINING_DATA_COUNTRIES,
 )
-from src.constants.constants import FLOOD_INPUT_PROPERTIES, FLOOD_SCALE, LANDCOVER_SCALE
+from src.constants.constants import (
+    FLOOD_INPUT_PROPERTIES,
+    FLOOD_SCALE,
+    LANDCOVER_SCALE,
+    FLOOD_INPUTS_PATH,
+    FLOOD_OUTPUTS_PATH,
+)
 from src.utils.general_utils.data_exists import data_exists
 from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
 from src.utils.general_utils.pygeoboundaries import get_adm_ee
@@ -29,7 +35,6 @@ GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-# Set the environment variable for Google Application Credentials
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
 
 training_data_countries = TRAINING_DATA_COUNTRIES
@@ -56,30 +61,25 @@ def filter_data_from_gcs(country_name):
     Returns:
     - A list of tuples with the start and end dates for the filtered rows
     """
-    # Initialize a client and get the bucket and blob
+
     client = storage.Client(project=cloud_project)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(file_name)
 
-    # Download the blob into an in-memory file
     content = blob.download_as_bytes()
 
-    # Read the Excel file into a DataFrame
     excel_data = pd.read_excel(BytesIO(content), engine="openpyxl")
 
-    # Filter the DataFrame based on the 'Country' column, case-insensitive
     filtered_data = excel_data[
         excel_data["Country"].str.lower() == country_name.lower()
     ].copy()  # Ensure this is a copy to avoid SettingWithCopyWarning
 
-    # Process start and end dates
     for date_type in ["Start", "End"]:
         year_col = f"{date_type} Year"
         month_col = f"{date_type} Month"
         day_col = f"{date_type} Day"
         date_col = f"{date_type.lower()}_date"
 
-        # Combine the date components into a single date column
         combined_dates = pd.to_datetime(
             {
                 "year": filtered_data[year_col],
@@ -89,22 +89,17 @@ def filter_data_from_gcs(country_name):
             errors="coerce",
         )
 
-        # Detect rows where dates could not be parsed and print them
         invalid_rows = filtered_data[combined_dates.isna()]
         if not invalid_rows.empty:
             print(f"Invalid {date_type.lower()} dates detected:")
             print(invalid_rows[[year_col, month_col, day_col]])
 
-        # Assign parsed dates back to the main DataFrame
         filtered_data.loc[:, date_col] = combined_dates  # Use .loc to avoid warnings
 
-    # Filter out rows where either start_date or end_date are NaT
     valid_data = filtered_data.dropna(subset=["start_date", "end_date"])
 
-    # Further filter rows to include only those with start year >= 2016
     valid_data = valid_data[valid_data["Start Year"] >= 2016]
 
-    # Create date pairs as a list of tuples
     date_pairs = [
         (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
         for start_date, end_date in zip(
@@ -117,11 +112,9 @@ def filter_data_from_gcs(country_name):
 
 def make_training_data(bbox, start_date, end_date):
 
-    # Convert the dates to datetime objects
     start_date = start_date
     end_date = end_date
 
-    # Calculate the new dates
     before_start = (start_date - timedelta(days=10)).strftime("%Y-%m-%d")
     before_end = start_date.strftime("%Y-%m-%d")
 
@@ -133,8 +126,6 @@ def make_training_data(bbox, start_date, end_date):
     year_before_start = start_date - timedelta(days=365)
     start_of_year = datetime(year_before_start.year, 1, 1)
     end_of_year = datetime(year_before_start.year, 12, 31)
-
-    # Load the datasets
 
     dem = ee.Image("WWF/HydroSHEDS/03VFDEM").clip(bbox)
     slope = ee.Terrain.slope(dem)
@@ -351,17 +342,6 @@ def make_training_data(bbox, start_date, end_date):
         .addBands(flood_labeled_image.toFloat().rename("flooded_mask"))
     )
 
-    # # Assuming 'combined' is an ee.Image
-    # image_info = combined.getInfo()
-
-    # # Print band names directly
-    # print("Sampling image band names:", combined.bandNames().getInfo())
-
-    # # Iterate through bands to print names and types
-    # print("Band names and types:")
-    # for band in image_info["bands"]:
-    #     print(f"Band name: {band['id']}, Type: {band['data_type']['precision']}")
-
     return combined
 
 
@@ -372,9 +352,11 @@ def generate_and_export_training_data():
 
         snake_case_place_name = country.replace(" ", "_").lower()
 
+        # Define the base directory name
+        base_directory = f"{FLOOD_INPUTS_PATH}{snake_case_place_name}/"
+
         # Check if flood training data already exists
-        prefix = f"data/{snake_case_place_name}/inputs/flood_training_data_"
-        if data_exists(bucket_name, prefix):
+        if data_exists(bucket_name, f"{base_directory}flood_training_data_"):
             print(f"Flood training data already exists for {country}. Skipping...")
             continue
 
@@ -392,18 +374,13 @@ def generate_and_export_training_data():
             for start, end in date_pairs
         ]
 
-        # Define Google Cloud Storage bucket name and fileNamePrefix
-        directory_name = f"data/{snake_case_place_name}/inputs/"
-
         # Initialize Google Cloud Storage client and create the new directory
         storage_client = storage.Client(project=cloud_project)
         bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(
-            directory_name
-        )  # This creates a 'directory' by specifying a blob that ends with '/'
+        blob = bucket.blob(base_directory)
         blob.upload_from_string(
             "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
-        )  # Create the directory
+        )
 
         tasks = []
 
@@ -412,7 +389,7 @@ def generate_and_export_training_data():
             combined = make_training_data(bbox, start_date, end_date)
             if combined:
                 file_name = (
-                    f"{directory_name}flood_training_data_{start_date}_{end_date}.tif"
+                    f"{base_directory}flood_training_data_{start_date}_{end_date}.tif"
                 )
                 task = ee.batch.Export.image.toCloudStorage(
                     image=combined,
@@ -634,11 +611,6 @@ def train_and_evaluate_classifier(
             for freq in class_histogram.values()
         ]
 
-        # print class values and points for verification
-        # print("Class values:", class_values)
-        # print("Class points:", class_points)
-        # print("Samples per flood class:", samples_per_flood_class)
-
         flooded_data = aggregate_samples(
             image_collection,
             bbox,
@@ -659,19 +631,12 @@ def train_and_evaluate_classifier(
             print("Error: Failed to aggregate samples.")
             return None, None
 
-        # Print sample sizes for verification
-        # print("Flooded sample size:", flooded_data.size().getInfo())
-        # print("Unflooded sample size:", unflooded_data.size().getInfo())
-
-        # Add a random column to flooded and unflooded data
         flooded_data = flooded_data.randomColumn()
         unflooded_data = unflooded_data.randomColumn()
 
-        # Sampling proportions for training, testing, and validation
         train_split = 0.6
         test_split = 0.2
 
-        # Filter flooded data for training, testing, and validation sets
         flooded_training = flooded_data.filter(ee.Filter.lt("random", train_split))
         flooded_remaining = flooded_data.filter(ee.Filter.gte("random", train_split))
 
@@ -682,7 +647,6 @@ def train_and_evaluate_classifier(
             ee.Filter.gte("random", train_split + test_split)
         )
 
-        # Filter unflooded data for training, testing, and validation sets
         unflooded_training = unflooded_data.filter(ee.Filter.lt("random", train_split))
         unflooded_remaining = unflooded_data.filter(
             ee.Filter.gte("random", train_split)
@@ -695,26 +659,9 @@ def train_and_evaluate_classifier(
             ee.Filter.gte("random", train_split + test_split)
         )
 
-        # Print sample sizes for verification
-        # print("Flooded training sample size:", flooded_training.size().getInfo())
-        # print("Flooded testing sample size:", flooded_testing.size().getInfo())
-        # print("Flooded validation sample size:", flooded_validation.size().getInfo())
-
-        # print("Unflooded training sample size:", unflooded_training.size().getInfo())
-        # print("Unflooded testing sample size:", unflooded_testing.size().getInfo())
-        # print(
-        #     "Unflooded validation sample size:", unflooded_validation.size().getInfo()
-        # )
-
-        # Merge the datasets
         training_samples = flooded_training.merge(unflooded_training)
         testing_samples = flooded_testing.merge(unflooded_testing)
         validation_samples = flooded_validation.merge(unflooded_validation)
-
-        # Print merged dataset sizes for verification
-        # print("Training sample size:", training_samples.size().getInfo())
-        # print("Testing sample size:", testing_samples.size().getInfo())
-        # print("Validation sample size:", validation_samples.size().getInfo())
 
         if not training_samples or not testing_samples or not validation_samples:
             print("Error: Failed to sample datasets.")
@@ -735,18 +682,22 @@ def train_and_evaluate_classifier(
             "flooded_mask", "classification"
         )
 
+        base_directory = (
+            f"{FLOOD_OUTPUTS_PATH}{FLOOD_MODEL_ASSET_ID}/{snake_case_place_name}/"
+        )
+
         print("Exporting results...")
         export_results_to_cloud_storage(
             test_accuracy,
             "Testing",
             bucket_name,
-            f"data/{snake_case_place_name}/outputs/testing_results",
+            f"{base_directory}testing_results",
         )
         export_results_to_cloud_storage(
             validation_accuracy,
             "Validation",
             bucket_name,
-            f"data/{snake_case_place_name}/outputs/validation_results",
+            f"{base_directory}validation_results",
         )
 
         print("Training probability predictor...")
@@ -996,21 +947,16 @@ def initialize_storage_client(project, bucket_name):
     return bucket
 
 
-import argparse
-
-
 def export_predictions(classified_image, place_name, bucket, directory_name, scale):
     """Export the predictions to Google Cloud Storage."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
     predicted_image_filename = f"predicted_flood_risk_{snake_case_place_name}"
 
-    # Ensure the directory exists by uploading an empty file
     blob = bucket.blob(directory_name)
     blob.upload_from_string(
         "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
     )
 
-    # Start export task
     task = start_export_task(
         classified_image,
         f"{place_name} predicted flood risk",
@@ -1024,11 +970,10 @@ def export_predictions(classified_image, place_name, bucket, directory_name, sca
 def predict(place_name):
     """Main function to predict flood risk for a given place and export the result."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
-    directory_name = f"data/{snake_case_place_name}/outputs/"
+    base_directory = f"{FLOOD_OUTPUTS_PATH}{snake_case_place_name}/"
     predicted_image_filename = f"predicted_flood_risk_{snake_case_place_name}"
 
-    # Check if predictions data already exists
-    if data_exists(GOOGLE_CLOUD_BUCKET, directory_name + predicted_image_filename):
+    if data_exists(GOOGLE_CLOUD_BUCKET, f"{base_directory}{predicted_image_filename}"):
         print(
             f"Flood risk predictions data already exists for {place_name}. Skipping prediction."
         )
@@ -1041,11 +986,9 @@ def predict(place_name):
         image_to_classify, FLOOD_INPUT_PROPERTIES, FLOOD_MODEL_ASSET_ID
     )
 
-    # Initialize the storage client and export predictions
     bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
     task = export_predictions(
-        classified_image, place_name, bucket, directory_name, FLOOD_SCALE
+        classified_image, place_name, bucket, base_directory, FLOOD_SCALE
     )
 
-    # Monitor the export task
     monitor_tasks([task], 600)

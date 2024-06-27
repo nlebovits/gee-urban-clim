@@ -11,7 +11,12 @@ from dotenv import load_dotenv
 from google.cloud import storage
 
 from src.config.config import HEAT_MODEL_ASSET_ID, TRAINING_DATA_COUNTRIES
-from src.constants.constants import HEAT_INPUT_PROPERTIES, HEAT_SCALE
+from src.constants.constants import (
+    HEAT_INPUT_PROPERTIES,
+    HEAT_SCALE,
+    HEAT_INPUTS_PATH,
+    HEAT_OUTPUTS_PATH,
+)
 from src.utils.general_utils.data_exists import data_exists
 from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
 from src.utils.general_utils.pygeoboundaries import get_adm_ee
@@ -95,7 +100,7 @@ def download_ndvi_data_for_year(
 ):
     storage_client = storage.Client(project=cloud_project)
     bucket = storage_client.bucket(bucket_name)
-    blob_name = f"data/{snake_case_place_name}/inputs/ndvi_min_max_{year}.csv"
+    blob_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/ndvi_min_max_{year}.csv"
     blob = bucket.blob(blob_name)
     ndvi_data_csv = blob.download_as_string()
     ndvi_data = csv.reader(StringIO(ndvi_data_csv.decode("utf-8")))
@@ -108,7 +113,7 @@ def download_ndvi_data_for_year(
 def export_ndvi_min_max(
     year, bbox, scale, gcs_bucket, snake_case_place_name, file_prefix="ndvi_min_max"
 ):
-    file_path_prefix = f"data/{snake_case_place_name}/inputs/{file_prefix}_{year}"
+    file_path_prefix = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/{file_prefix}_{year}"
     if data_exists(gcs_bucket, file_path_prefix):
         print(f"File for {year} already exists. Skipping export.")
         return None
@@ -181,7 +186,7 @@ def process_heat_data(place_name):
     aoi = get_adm_ee(territories=place_name, adm="ADM0")
     bbox = aoi.geometry().bounds()
     bucket_name = GOOGLE_CLOUD_BUCKET
-    directory_name = f"heat_data/{snake_case_place_name}/inputs/"
+    directory_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/"
 
     if data_exists(bucket_name, directory_name):
         print(f"Training data for {place_name} already exists. Skipping...")
@@ -258,7 +263,7 @@ def read_data_to_image_collection(training_data_countries):
     # Check for data existence and collect URIs
     for country in training_data_countries:
         snake_case_place_name = country.replace(" ", "_").lower()
-        directory_name = f"heat_data/{snake_case_place_name}/inputs/"
+        directory_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/"
 
         if data_exists(bucket_name, directory_name):
             print(f"Data for {country} exists. Collecting URIs...")
@@ -443,7 +448,7 @@ def train_and_evaluate():
     rmse_feature = ee.Feature(None, {"RMSE": rmse})
 
     # Step 2: Export the RMSE result
-    output_path = "data/outputs/rmse_results"
+    output_path = f"{HEAT_OUTPUTS_PATH}{HEAT_MODEL_ASSET_ID}/rmse_results"
 
     def export_results_to_cloud_storage(result, result_type, bucket_name, output_path):
         task = ee.batch.Export.table.toCloudStorage(
@@ -523,7 +528,7 @@ def initialize_storage_client(project, bucket_name):
 def export_predictions(classified_image, place_name, bucket, directory_name, scale):
     """Export the predictions to Google Cloud Storage."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
-    predicted_image_filename = f"predicted_median_top5_{snake_case_place_name}"
+    predicted_image_filename = f"predicted_heat_hazard_{snake_case_place_name}"
 
     # Ensure the directory exists by uploading an empty file
     blob = bucket.blob(directory_name)
@@ -545,7 +550,7 @@ def export_predictions(classified_image, place_name, bucket, directory_name, sca
 def predict(place_name):
     """Main function to predict heat for a given place and export the result."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
-    directory_name = f"data/{snake_case_place_name}/outputs/"
+    directory_name = f"{HEAT_OUTPUTS_PATH}{snake_case_place_name}/"
 
     # Check if predictions data already exists
     if data_exists(GOOGLE_CLOUD_BUCKET, directory_name):

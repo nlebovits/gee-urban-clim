@@ -27,14 +27,16 @@ from src.constants.constants import (
     FLOOD_SCALE,
     LANDCOVER_SCALE,
 )
-from src.utils.general_utils.data_exists import data_exists
-from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
+
+
 from src.utils.pygeoboundaries.main import get_area_of_interest
 
+load_dotenv()
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
+GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 
-# function to make the place name snake case-------------------------------------------------------
-def make_snake_case(place_name):
-    return place_name.replace(" ", "_").lower()
+
+ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
 
 
 # function to initialize google cloud storage connection-------------------------------------------------------
@@ -43,6 +45,14 @@ def initialize_storage_client(project, GOOGLE_CLOUD_BUCKET):
     storage_client = storage.Client(project=project)
     bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
     return bucket
+
+
+bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
+
+
+# function to make the place name snake case-------------------------------------------------------
+def make_snake_case(place_name):
+    return place_name.replace(" ", "_").lower()
 
 
 # functions to start and monitor ee export tasks-------------------------------------------------------
@@ -156,20 +166,34 @@ def check_and_export_geotiffs_to_bucket(
 
 
 # function to check if a file or files exist before proceeding-------------------------------------------------------
-def list_and_check_gcs_files(bucket, prefix):
+def data_exists(bucket_name, prefix):
+    storage_client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
+    bucket = storage_client.bucket(bucket_name)
+    blobs = list(bucket.list_blobs(prefix=prefix))
+    return len(blobs) > 0
+
+
+def list_and_check_gcs_files(bucket_name, prefix):
     """Check if files exist in a GCS bucket folder and list them if they do."""
+    # Create a GCS client
+    client = storage.Client()
+
+    # Obtain the bucket object
+    bucket = client.bucket(bucket_name)
 
     # List blobs with the specified prefix
     blobs = list(bucket.list_blobs(prefix=prefix))
 
     # Check if any files exist with the specified prefix
     if len(blobs) == 0:
-        print(f"No files found with prefix '{prefix}' in bucket '{bucket}'.")
+        print(f"No files found with prefix '{prefix}' in bucket '{bucket_name}'.")
         return []
 
     # List and return all files with the specified prefix
     file_urls = [
-        f"gs://{bucket}/{blob.name}" for blob in blobs if blob.name.endswith(".tif")
+        f"gs://{bucket_name}/{blob.name}"
+        for blob in blobs
+        if blob.name.endswith(".tif")
     ]
     return file_urls
 

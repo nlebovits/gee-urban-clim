@@ -26,6 +26,7 @@ from src.utils.utils import (
     make_snake_case,
     monitor_tasks,
     start_export_task,
+    list_and_check_gcs_files,
 )
 
 load_dotenv()
@@ -198,7 +199,7 @@ def process_heat_data(place_name):
         if task is not None:
             ndvi_tasks.append(task)
 
-    monitor_tasks(ndvi_tasks)
+    monitor_tasks(ndvi_tasks, 30)
 
     image_list = []
     tasks = []

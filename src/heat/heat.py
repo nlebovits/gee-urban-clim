@@ -4,6 +4,7 @@ from .utils import make_training_data, predict, train_and_evaluate
 
 
 def main(place_name):
+
     make_training_data()
     train_and_evaluate()
     print(f"Predicting for {place_name}...")

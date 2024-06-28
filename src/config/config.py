@@ -1,4 +1,4 @@
-HEAT_MODEL_ASSET_ID = "projects/gee-urban-clim/assets/heat-model-00"
+HEAT_MODEL_ASSET_ID = "projects/gee-urban-clim/assets/heat-model-01"
 
 FLOOD_MODEL_ASSET_ID = "projects/gee-urban-clim/assets/flood-model-00"
 

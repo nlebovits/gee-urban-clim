@@ -9,7 +9,16 @@ import geemap
 import pretty_errors
 from dotenv import load_dotenv
 from google.cloud import storage
-
+from src.utils.utils import (
+    initialize_storage_client,
+    classify_image,
+    make_snake_case,
+    start_export_task,
+    monitor_tasks,
+    data_exists,
+    export_predictions,
+)
+from src.utils.pygeoboundaries.main import get_area_of_interest
 from src.config.config import HEAT_MODEL_ASSET_ID, TRAINING_DATA_COUNTRIES
 from src.constants.constants import (
     HEAT_INPUT_PROPERTIES,
@@ -17,17 +26,14 @@ from src.constants.constants import (
     HEAT_INPUTS_PATH,
     HEAT_OUTPUTS_PATH,
 )
-from src.utils.general_utils.data_exists import data_exists
-from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
-from src.utils.general_utils.pygeoboundaries import get_adm_ee
 
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 
-GOOGLE_CLOUD_BUCKET = GOOGLE_CLOUD_BUCKET
 
 ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
+bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
 
 
 def process_year(year, bbox, ndvi_min, ndvi_max):
@@ -88,11 +94,7 @@ def process_year(year, bbox, ndvi_min, ndvi_max):
     return image_for_sampling
 
 
-def download_ndvi_data_for_year(
-    year, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET, snake_case_place_name
-):
-    storage_client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
-    bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
+def download_ndvi_data_for_year(year, snake_case_place_name):
     blob_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/ndvi_min_max_{year}.csv"
     blob = bucket.blob(blob_name)
     ndvi_data_csv = blob.download_as_string()
@@ -104,10 +106,10 @@ def download_ndvi_data_for_year(
 
 
 def export_ndvi_min_max(
-    year, bbox, scale, gcs_bucket, snake_case_place_name, file_prefix="ndvi_min_max"
+    year, bbox, scale, snake_case_place_name, file_prefix="ndvi_min_max"
 ):
     file_path_prefix = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/{file_prefix}_{year}"
-    if data_exists(gcs_bucket, file_path_prefix):
+    if data_exists(GOOGLE_CLOUD_BUCKET, file_path_prefix):
         print(f"File for {year} already exists. Skipping export.")
         return None
 
@@ -140,7 +142,7 @@ def export_ndvi_min_max(
         task = ee.batch.Export.table.toCloudStorage(
             collection=ee.FeatureCollection([feature]),
             description=f"{file_prefix}_{year}",
-            bucket=gcs_bucket,
+            bucket=GOOGLE_CLOUD_BUCKET,
             fileNamePrefix=file_path_prefix,
             fileFormat="CSV",
         )
@@ -171,48 +173,37 @@ def cloud_mask(image):
 
 
 def process_heat_data(place_name):
-
     current_year = datetime.now().year
     years = range(current_year - 6, current_year - 1)
     scale = HEAT_SCALE
-    snake_case_place_name = place_name.replace(" ", "_").lower()
-    aoi = get_adm_ee(territories=place_name, adm="ADM0")
-    bbox = aoi.geometry().bounds()
+    snake_case_place_name = make_snake_case(place_name)
+    bbox = get_area_of_interest(place_name)
     directory_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/"
 
-    if data_exists(bucket_name, directory_name):
+    if data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
         print(f"Training data for {place_name} already exists. Skipping...")
         return
     else:
         print(f"Starting to generate data for {place_name}...")
 
-    def process_for_year(
-        year, GOOGLE_CLOUD_PROJECT, bucket_name, snake_case_place_name
-    ):
-        ndvi_min, ndvi_max = download_ndvi_data_for_year(
-            year, GOOGLE_CLOUD_PROJECT, bucket_name, snake_case_place_name
-        )
+    def process_for_year(year):
+        ndvi_min, ndvi_max = download_ndvi_data_for_year(year, snake_case_place_name)
         image_collection = process_year(year, bbox, ndvi_min, ndvi_max)
         return image_collection
 
     ndvi_tasks = []
     for year in years:
-        task = export_ndvi_min_max(
-            year, bbox, scale, bucket_name, snake_case_place_name
-        )
+        task = export_ndvi_min_max(year, bbox, scale, snake_case_place_name)
         if task is not None:
             ndvi_tasks.append(task)
 
     monitor_tasks(ndvi_tasks)
 
     image_list = []
-
     tasks = []
 
     for year in years:
-        image = process_for_year(
-            year, GOOGLE_CLOUD_PROJECT, bucket_name, snake_case_place_name
-        )
+        image = process_for_year(year)
         image_list.append(image)
 
     for i, image in enumerate(image_list):
@@ -220,13 +211,12 @@ def process_heat_data(place_name):
         task = ee.batch.Export.image.toCloudStorage(
             image=image,
             description=f"{snake_case_place_name}_heat_{year}",
-            bucket=bucket_name,
+            bucket=GOOGLE_CLOUD_BUCKET,
             fileNamePrefix=f"{directory_name}{year}/heat_{year}",
             scale=scale,
             region=bbox.getInfo()["coordinates"],
         )
         task.start()
-        # Add the task to the tasks list
         tasks.append(task)
         print(f"Exporting heat data for {place_name} for the year {year} to GCS...")
 
@@ -234,7 +224,6 @@ def process_heat_data(place_name):
 
 
 def make_training_data():
-
     print("Generating heat risk training data from the following countries:")
     print(", ".join(TRAINING_DATA_COUNTRIES))
 
@@ -244,42 +233,19 @@ def make_training_data():
     print("Data generation completed.")
 
 
-def list_blobs_with_prefix(bucket_name, prefix):
-    storage_client = storage.Client(project=GOOGLE_CLOUD_PROJECT)
-    bucket = storage_client.bucket(bucket_name)
-    return list(bucket.list_blobs(prefix=prefix))
-
-
-def read_data_to_image_collection(TRAINING_DATA_COUNTRIES):
-    bucket_name = GOOGLE_CLOUD_BUCKET
+def read_data_to_image_collection(training_data_countries):
     all_tif_list = []
 
-    # Check for data existence and collect URIs
-    for country in TRAINING_DATA_COUNTRIES:
-        snake_case_place_name = country.replace(" ", "_").lower()
+    for country in training_data_countries:
+        snake_case_place_name = make_snake_case(country)
         directory_name = f"{HEAT_INPUTS_PATH}{snake_case_place_name}/"
 
-        if data_exists(bucket_name, directory_name):
+        if data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
             print(f"Data for {country} exists. Collecting URIs...")
-            tif_list = []
             for year in range(datetime.now().year - 6, datetime.now().year - 1):
                 prefix = f"{directory_name}{year}/heat_{year}"
-                storage_client = storage.Client()
-                blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
-                for blob in blobs:
-                    if blob.name.endswith(".tif"):
-                        uri = f"gs://{bucket_name}/{blob.name}"
-                        tif_list.append(uri)
-
-            if tif_list:
-                print(f"Collected URIs for {country}:")
-                for uri in tif_list:
-                    print(uri)
-                all_tif_list.extend(tif_list)
-            else:
-                print(f"No .tif files found for {country}.")
-        else:
-            print(f"No data found for {country}. Skipping...")
+                uris = list_and_check_gcs_files(GOOGLE_CLOUD_BUCKET, prefix)
+                all_tif_list.extend(uris)
 
     if all_tif_list:
         print("Reading images from cloud bucket into image collection...")
@@ -300,7 +266,6 @@ def convert_landcover_to_int(image):
 
 
 def train_and_evaluate():
-    # Check if the trained model exists
     if ee.data.getInfo(HEAT_MODEL_ASSET_ID):
         print(
             f"Model already exists at {HEAT_MODEL_ASSET_ID}. Skipping training and evaluation."
@@ -417,7 +382,6 @@ def train_and_evaluate():
 
     print("Model training completed.")
 
-    # Evaluate the classifier on the most recent image
     print("Evaluating the classifier on the most recent image...")
     sorted_filtered_collection = image_collections.sort("system:time_start", False)
     recent_image = sorted_filtered_collection.first()
@@ -441,37 +405,30 @@ def train_and_evaluate():
     rmse = ee.Number(mean_squared_error.get("difference")).sqrt()
     rmse_feature = ee.Feature(None, {"RMSE": rmse})
 
-    # Step 2: Export the RMSE result
     output_path = f"{HEAT_OUTPUTS_PATH}{HEAT_MODEL_ASSET_ID}/rmse_results"
 
-    def export_results_to_cloud_storage(result, result_type, bucket_name, output_path):
+    def export_results_to_cloud_storage(result, result_type, output_path):
         task = ee.batch.Export.table.toCloudStorage(
             collection=ee.FeatureCollection([result]),
             description=f"Export {result_type} results",
-            bucket=bucket_name,
+            bucket=GOOGLE_CLOUD_BUCKET,
             fileNamePrefix=output_path,
             fileFormat="CSV",
         )
         task.start()
         print(
-            f"Exporting {result_type} results to {output_path} in bucket {bucket_name}."
+            f"Exporting {result_type} results to {output_path} in bucket {GOOGLE_CLOUD_BUCKET}."
         )
         return task
 
-    task = export_results_to_cloud_storage(
-        mean_squared_error, "RMSE", bucket_name, output_path
-    )
-
+    task = export_results_to_cloud_storage(mean_squared_error, "RMSE", output_path)
     monitor_tasks([task], 30)
 
     print("Exported RMSE results to cloud storage.")
 
     def export_model_as_ee_asset(regressor, asset_id):
-
-        # Export the classifier
         task = ee.batch.Export.classifier.toAsset(
             classifier=regressor,
-            # description="heat_rf_model_export",
             assetId=asset_id,
         )
         task.start()
@@ -479,21 +436,14 @@ def train_and_evaluate():
         return task
 
     task = export_model_as_ee_asset(regressor, HEAT_MODEL_ASSET_ID)
-
     monitor_tasks([task], 30)
 
     print(
-        "Exported trained model to an Earth Engine asset with ID ", HEAT_MODEL_ASSET_ID
+        f"Exported trained model to an Earth Engine asset with ID {HEAT_MODEL_ASSET_ID}."
     )
 
 
-def get_area_of_interest(place_name):
-    """Retrieve the area of interest based on the place name."""
-    return get_adm_ee(territories=place_name, adm="ADM0").geometry().bounds()
-
-
 def process_data_to_classify(bbox):
-    """Prepare the data to be classified."""
     landcover = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(bbox)
     dem = ee.ImageCollection("projects/sat-io/open-datasets/FABDEM").mosaic().clip(bbox)
 
@@ -506,47 +456,10 @@ def process_data_to_classify(bbox):
     return image_to_classify
 
 
-def classify_image(image_to_classify, input_properties, model_asset_id):
-    """Classify the image using the pre-trained model."""
-    regressor = ee.Classifier.load(model_asset_id)
-    return image_to_classify.select(input_properties).classify(regressor)
-
-
-def initialize_storage_client(project, bucket_name):
-    """Initialize the Google Cloud Storage client."""
-    storage_client = storage.Client(project=project)
-    bucket = storage_client.bucket(bucket_name)
-    return bucket
-
-
-def export_predictions(classified_image, place_name, bucket, directory_name, scale):
-    """Export the predictions to Google Cloud Storage."""
-    snake_case_place_name = place_name.replace(" ", "_").lower()
-    predicted_image_filename = f"predicted_heat_hazard_{snake_case_place_name}"
-
-    # Ensure the directory exists by uploading an empty file
-    blob = bucket.blob(directory_name)
-    blob.upload_from_string(
-        "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
-    )
-
-    # Start export task
-    task = start_export_task(
-        classified_image,
-        f"{place_name} predicted median temp of top 5 hottest observations",
-        bucket.name,
-        directory_name + predicted_image_filename,
-        scale,
-    )
-    return task
-
-
 def predict(place_name):
-    """Main function to predict heat for a given place and export the result."""
-    snake_case_place_name = place_name.replace(" ", "_").lower()
+    snake_case_place_name = make_snake_case(place_name)
     directory_name = f"{HEAT_OUTPUTS_PATH}{snake_case_place_name}/"
 
-    # Check if predictions data already exists
     if data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
         print(f"Predictions data already exists for {place_name}. Skipping prediction.")
         return
@@ -558,11 +471,9 @@ def predict(place_name):
         image_to_classify, HEAT_INPUT_PROPERTIES, HEAT_MODEL_ASSET_ID
     )
 
-    # Initialize the storage client and export predictions
-    bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
+    predicted_image_filename = f"predicted_heat_hazard_{snake_case_place_name}"
     task = export_predictions(
-        classified_image, place_name, bucket, directory_name, HEAT_SCALE
+        classified_image, predicted_image_filename, bucket, directory_name, HEAT_SCALE
     )
 
-    # Monitor the export task
     monitor_tasks([task], 600)

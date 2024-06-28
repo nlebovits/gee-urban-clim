@@ -689,7 +689,7 @@ def train_and_evaluate_classifier(
         print("Training probability predictor...")
         prob_classifier = (
             ee.Classifier.smileRandomForest(10)
-            .setOutputMode("PROBABILITY")
+            .setOutputMode("raw")
             .train(
                 features=training_samples,
                 classProperty="flooded_mask",

@@ -26,9 +26,12 @@ from src.constants.constants import (
     FLOOD_INPUTS_PATH,
     FLOOD_OUTPUTS_PATH,
 )
-from src.utils.general_utils.data_exists import data_exists
-from src.utils.general_utils.monitor_ee_tasks import monitor_tasks, start_export_task
-from src.utils.general_utils.pygeoboundaries import get_adm_ee
+from src.utils.utils import (
+    start_export_task,
+    monitor_tasks,
+    data_exists,
+)
+from src.utils.pygeoboundaries.main import get_area_of_interest
 
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -347,8 +350,7 @@ def generate_and_export_training_data():
             continue
 
         # Get bounding box and filter data
-        aoi = get_adm_ee(territories=country, adm="ADM0")
-        bbox = aoi.geometry().bounds()
+        bbox = get_area_of_interest(country)
         date_pairs = filter_data_from_gcs(country)
 
         # Prepare date pairs for processing
@@ -781,8 +783,7 @@ def process_all_flood_data():
 
     print("Training and assessing model on combined data...")
 
-    aoi = get_adm_ee(territories=TRAINING_DATA_COUNTRIES, adm="ADM0")
-    bbox = aoi.geometry().bounds()
+    bbox = get_area_of_interest(TRAINING_DATA_COUNTRIES)
 
     prob_classifier, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
         combined_image_collection, bbox, GOOGLE_CLOUD_BUCKET, "combined_model"
@@ -804,11 +805,6 @@ def process_all_flood_data():
     monitor_tasks([task], 60)
 
     print("Process completed successfully.")
-
-
-def get_area_of_interest(place_name):
-    """Retrieve the area of interest based on the place name."""
-    return get_adm_ee(territories=place_name, adm="ADM0").geometry().bounds()
 
 
 def process_data_to_classify(bbox):

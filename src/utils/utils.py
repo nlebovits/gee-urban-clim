@@ -364,12 +364,15 @@ def export_predictions(
         "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
     )
 
+    # Construct the correct file path for the export
+    file_path = f"{directory_name}{predicted_image_filename}"
+
     # Start export task
     task = start_export_task(
         classified_image,
         predicted_image_filename,
         bucket.name,
-        directory_name + predicted_image_filename,
+        file_path,
         scale,
     )
     return task

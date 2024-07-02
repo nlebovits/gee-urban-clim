@@ -24,13 +24,12 @@ def main(place_name):
     bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
 
     snake_case_place_name = make_snake_case(place_name)
-    directory_name = f"{HEAT_OUTPUTS_PATH}{snake_case_place_name}/"
 
     predict(
         place_name,
         f"predicted_heat_hazard_{snake_case_place_name}",
         bucket,
-        directory_name,
+        HEAT_OUTPUTS_PATH,
         HEAT_SCALE,
         process_data_to_classify,
         HEAT_INPUT_PROPERTIES,

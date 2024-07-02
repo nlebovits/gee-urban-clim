@@ -28,6 +28,7 @@ from src.utils.utils import (
     start_export_task,
     list_and_check_gcs_files,
     read_images_into_collection,
+    export_model_as_ee_asset,
 )
 
 load_dotenv()
@@ -412,16 +413,9 @@ def train_and_evaluate():
 
     print("Exported RMSE results to cloud storage.")
 
-    def export_model_as_ee_asset(regressor, asset_id):
-        task = ee.batch.Export.classifier.toAsset(
-            classifier=regressor,
-            assetId=asset_id,
-        )
-        task.start()
-        print(f"Exporting trained heat model with GEE ID {asset_id}.")
-        return task
-
-    task = export_model_as_ee_asset(regressor, HEAT_MODEL_ASSET_ID)
+    task = export_model_as_ee_asset(
+        regressor, "heat_risk_prediction", HEAT_MODEL_ASSET_ID
+    )
     monitor_tasks([task], 30)
 
     print(
@@ -440,26 +434,3 @@ def process_data_to_classify(bbox):
     )
 
     return image_to_classify
-
-
-def predict(place_name):
-    snake_case_place_name = make_snake_case(place_name)
-    directory_name = f"{HEAT_OUTPUTS_PATH}{snake_case_place_name}/"
-
-    if data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
-        print(f"Predictions data already exists for {place_name}. Skipping prediction.")
-        return
-
-    print("Processing data to classify...")
-    bbox = get_area_of_interest(place_name)
-    image_to_classify = process_data_to_classify(bbox)
-    classified_image = classify_image(
-        image_to_classify, HEAT_INPUT_PROPERTIES, HEAT_MODEL_ASSET_ID
-    )
-
-    predicted_image_filename = f"predicted_heat_hazard_{snake_case_place_name}"
-    task = export_predictions(
-        classified_image, predicted_image_filename, bucket, directory_name, HEAT_SCALE
-    )
-
-    monitor_tasks([task], 600)

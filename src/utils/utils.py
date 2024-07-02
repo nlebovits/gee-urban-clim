@@ -281,6 +281,8 @@ def predict(
 ):
     """Main function to predict risk for a given place and export the result."""
 
+    snake_case_place_name = make_snake_case(place_name)
+
     base_directory = f"{directory_name}{snake_case_place_name}/"
 
     # Check if predictions data already exists

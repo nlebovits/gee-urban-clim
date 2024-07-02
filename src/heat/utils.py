@@ -31,15 +31,36 @@ from src.utils.utils import (
     export_model_as_ee_asset,
 )
 
+# Load environment variables
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 
-
+# Initialize Earth Engine and Google Cloud Storage
 ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
 bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
 
 
+# Utility functions
+def apply_scale_factors(image):
+    optical_bands = image.select("SR_B.").multiply(0.0000275).add(-0.2)
+    thermal_bands = image.select("ST_B.*").multiply(0.00341802).add(149.0)
+    return image.addBands(optical_bands, None, True).addBands(thermal_bands, None, True)
+
+
+def cloud_mask(image):
+    cloud_shadow_bitmask = 1 << 3
+    cloud_bitmask = 1 << 5
+    qa = image.select("QA_PIXEL")
+    mask = (
+        qa.bitwiseAnd(cloud_shadow_bitmask)
+        .eq(0)
+        .And(qa.bitwiseAnd(cloud_bitmask).eq(0))
+    )
+    return image.updateMask(mask)
+
+
+# Processing functions
 def process_year(year, bbox, ndvi_min, ndvi_max):
     startDate = ee.Date.fromYMD(year, 1, 1)
     endDate = ee.Date.fromYMD(year, 12, 31)
@@ -77,8 +98,7 @@ def process_year(year, bbox, ndvi_min, ndvi_max):
 
     lstCollection = imageCollection.map(calculate_lst)
     hotDaysCollection = lstCollection.map(lambda image: image.gte(33))
-    hotDaysYear = hotDaysCollection.sum()
-    hotDaysYear = hotDaysYear.rename("hot_days")
+    hotDaysYear = hotDaysCollection.sum().rename("hot_days")
     array = lstCollection.toArray()
     sortedArray = array.arraySort().arraySlice(0, -5)
     medianOfTop5 = (
@@ -156,24 +176,6 @@ def export_ndvi_min_max(
     except Exception as e:
         print(f"An error occurred while starting the export task for year {year}: {e}")
         return None
-
-
-def apply_scale_factors(image):
-    optical_bands = image.select("SR_B.").multiply(0.0000275).add(-0.2)
-    thermal_bands = image.select("ST_B.*").multiply(0.00341802).add(149.0)
-    return image.addBands(optical_bands, None, True).addBands(thermal_bands, None, True)
-
-
-def cloud_mask(image):
-    cloud_shadow_bitmask = 1 << 3
-    cloud_bitmask = 1 << 5
-    qa = image.select("QA_PIXEL")
-    mask = (
-        qa.bitwiseAnd(cloud_shadow_bitmask)
-        .eq(0)
-        .And(qa.bitwiseAnd(cloud_bitmask).eq(0))
-    )
-    return image.updateMask(mask)
 
 
 def process_heat_data(place_name):

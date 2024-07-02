@@ -27,6 +27,7 @@ from src.utils.utils import (
     monitor_tasks,
     start_export_task,
     list_and_check_gcs_files,
+    read_images_into_collection,
 )
 
 load_dotenv()
@@ -235,7 +236,7 @@ def make_training_data():
     print("Data generation completed.")
 
 
-def read_data_to_image_collection(training_data_countries):
+def generate_heat_tif_list(training_data_countries):
     all_tif_list = []
 
     for country in training_data_countries:
@@ -249,22 +250,7 @@ def read_data_to_image_collection(training_data_countries):
                 uris = list_and_check_gcs_files(GOOGLE_CLOUD_BUCKET, prefix)
                 all_tif_list.extend(uris)
 
-    if all_tif_list:
-        print("Reading images from cloud bucket into image collection...")
-        ee_image_list = [ee.Image.loadGeoTIFF(url) for url in all_tif_list]
-        image_collection = ee.ImageCollection.fromImages(ee_image_list)
-
-        info = image_collection.size().getInfo()
-        print(f"Collection contains {info} images.")
-        return image_collection
-    else:
-        print("No data found for any country.")
-        return None
-
-
-def convert_landcover_to_int(image):
-    landcover_int = image.select("landcover").toInt()
-    return image.addBands(landcover_int.rename("landcover"), overwrite=True)
+    return all_tif_list
 
 
 def train_and_evaluate():
@@ -275,14 +261,12 @@ def train_and_evaluate():
         return
 
     print("Reading data to image collection...")
-    image_collection = read_data_to_image_collection(TRAINING_DATA_COUNTRIES)
+    training_data_tif_list = generate_heat_tif_list(TRAINING_DATA_COUNTRIES)
+    image_collections = read_images_into_collection(training_data_tif_list)
 
-    if image_collection is None:
+    if image_collections is None:
         print("No image collection to process.")
         return
-
-    print("Converting landcover to integer...")
-    image_collections = image_collection.map(convert_landcover_to_int)
 
     print("Sampling the land cover values...")
     sample = (

@@ -211,27 +211,35 @@ def extract_date_from_filename(filename):
 
 
 # function to read images in a directory from GCS into an image collection-------------------------------------------------------
+def convert_heat_bands_to_int(image):
+    landcover_int = image.select("landcover").toInt()
+    return image.addBands(landcover_int.rename("landcover"), overwrite=True)
+
+
+def convert_flood_bands_to_int(image):
+    """Convert the 'landcover' and 'flooded_mask' bands to integers."""
+    landcover_int = image.select("landcover").toInt()
+    flooded_mask_int = image.select("flooded_mask").toInt()
+
+    return image.addBands(
+        [
+            landcover_int.rename("landcover"),
+            flooded_mask_int.rename("flooded_mask"),
+        ],
+        overwrite=True,
+    )
+
+
 def read_images_into_collection(uri_list):
     """Read images from a list of URIs into an Earth Engine image collection."""
     ee_image_list = [ee.Image.loadGeoTIFF(url) for url in uri_list]
     image_collection = ee.ImageCollection.fromImages(ee_image_list)
 
-    # Convert the 'landcover' and 'flooded_mask' bands to integers if "flood" is in any URI
     if any("flood" in uri for uri in uri_list):
+        image_collection = image_collection.map(convert_flood_bands_to_int)
 
-        def convert_bands_to_int(image):
-            landcover_int = image.select("landcover").toInt()
-            flooded_mask_int = image.select("flooded_mask").toInt()
-
-            return image.addBands(
-                [
-                    landcover_int.rename("landcover"),
-                    flooded_mask_int.rename("flooded_mask"),
-                ],
-                overwrite=True,
-            )
-
-        image_collection = image_collection.map(convert_bands_to_int)
+    if any("heat" in uri for uri in uri_list):
+        image_collection = image_collection.map(convert_heat_bands_to_int)
 
     info = image_collection.size().getInfo()
     print(f"Collection contains {info} images.")

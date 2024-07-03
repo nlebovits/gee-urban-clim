@@ -27,13 +27,20 @@ from src.constants.constants import (
     LANDCOVER_SCALE,
 )
 from src.utils.pygeoboundaries.main import get_area_of_interest
-from src.utils.utils import data_exists, monitor_tasks, start_export_task
+from src.utils.utils import (
+    initialize_storage_client,
+    data_exists,
+    monitor_tasks,
+    start_export_task,
+    list_and_check_gcs_files,
+    read_images_into_collection,
+)
 
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_BUCKET = os.getenv("GOOGLE_CLOUD_BUCKET")
 
-ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
+bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
 
 samples_per_flood_class = 50000
 
@@ -685,18 +692,17 @@ def train_and_evaluate_classifier(
         )
 
         print("Training probability predictor...")
-        prob_classifier = (
-            ee.Classifier.smileRandomForest(10)
-            .setOutputMode("raw")
-            .train(
-                features=training_samples,
-                classProperty="flooded_mask",
-                inputProperties=FLOOD_INPUT_PROPERTIES,
-            )
+        classifier = ee.Classifier.smileRandomForest(10).train(
+            features=training_samples,
+            classProperty="flooded_mask",
+            inputProperties=FLOOD_INPUT_PROPERTIES,
         )
+        trees = ee.List(ee.Dictionary(classifier.explain()).get("trees"))
 
-        print("Training and evaluation process completed.")
-        return prob_classifier, test_accuracy, validation_accuracy
+        dummy = ee.Feature()
+        col = ee.FeatureCollection(trees.map(lambda x: dummy.set("tree", x)))
+
+        return col, test_accuracy, validation_accuracy
     except Exception as e:
         print(f"Unexpected error: {e}")
         return None, None
@@ -713,32 +719,32 @@ def list_gcs_files(GOOGLE_CLOUD_BUCKET, prefix):
     ]
 
 
-def read_images_into_collection(GOOGLE_CLOUD_BUCKET, prefix):
-    """Read images from cloud bucket into an Earth Engine image collection."""
-    tif_list = list_gcs_files(GOOGLE_CLOUD_BUCKET, prefix)
-    ee_image_list = [ee.Image.loadGeoTIFF(url) for url in tif_list]
-    image_collection = ee.ImageCollection.fromImages(ee_image_list)
+# def read_images_into_collection(GOOGLE_CLOUD_BUCKET, prefix):
+#     """Read images from cloud bucket into an Earth Engine image collection."""
+#     tif_list = list_gcs_files(GOOGLE_CLOUD_BUCKET, prefix)
+#     ee_image_list = [ee.Image.loadGeoTIFF(url) for url in tif_list]
+#     image_collection = ee.ImageCollection.fromImages(ee_image_list)
 
-    # Convert the 'landcover' and 'flooded_mask' bands to integers
-    def convert_bands_to_int(image):
-        landcover_int = image.select("landcover").toInt()
-        flooded_mask_int = image.select("flooded_mask").toInt()
+#     # Convert the 'landcover' and 'flooded_mask' bands to integers
+#     def convert_bands_to_int(image):
+#         landcover_int = image.select("landcover").toInt()
+#         flooded_mask_int = image.select("flooded_mask").toInt()
 
-        return image.addBands(
-            [
-                landcover_int.rename("landcover"),
-                flooded_mask_int.rename("flooded_mask"),
-            ],
-            overwrite=True,
-        )
+#         return image.addBands(
+#             [
+#                 landcover_int.rename("landcover"),
+#                 flooded_mask_int.rename("flooded_mask"),
+#             ],
+#             overwrite=True,
+#         )
 
-    # Apply the function to each image in the collection
-    image_collection = image_collection.map(convert_bands_to_int)
+#     # Apply the function to each image in the collection
+#     image_collection = image_collection.map(convert_bands_to_int)
 
-    info = image_collection.size().getInfo()
-    print(f"Collection contains {info} images.")
+#     info = image_collection.size().getInfo()
+#     print(f"Collection contains {info} images.")
 
-    return image_collection
+#     return image_collection
 
 
 def process_all_flood_data():
@@ -781,23 +787,29 @@ def process_all_flood_data():
 
     bbox = get_area_of_interest(TRAINING_DATA_COUNTRIES)
 
-    prob_classifier, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
+    col, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
         combined_image_collection, bbox, GOOGLE_CLOUD_BUCKET, "combined_model"
     )
-    if prob_classifier is None:
+    if col is None:
         print("Training and evaluation failed outright. Exiting...")
         return
 
-    def export_model_as_ee_asset(classifier, asset_id):
-        task = ee.batch.Export.classifier.toAsset(
-            classifier=classifier,
-            assetId=asset_id,
+    def export_rf_trees_to_gcs(col, description, asset_id, bucket, outputs_path):
+        file_name_prefix = f"{bucket}/{outputs_path}/trained_models/{asset_id}"
+        task = ee.batch.Export.table.toCloudStorage(
+            collection=col,
+            description=description,
+            bucket=bucket,
+            fileNamePrefix=file_name_prefix,
         )
         task.start()
-        print(f"Exporting trained flood model with GEE ID {asset_id}.")
+        print(f"Exporting trained flood model to GCS {file_name_prefix}.")
         return task
 
-    task = export_model_as_ee_asset(prob_classifier, FLOOD_MODEL_ASSET_ID)
+    # Export and monitor the task
+    task = export_rf_trees_to_gcs(
+        pcol, "Export Flood Model", FLOOD_MODEL_ASSET_ID, bucket, FLOOD_OUTPUTS_PATH
+    )
     monitor_tasks([task], 60)
 
     print("Process completed successfully.")

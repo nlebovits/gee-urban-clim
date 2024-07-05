@@ -34,6 +34,7 @@ from src.utils.utils import (
     start_export_task,
     list_and_check_gcs_files,
     read_images_into_collection,
+    classify_image,
 )
 
 load_dotenv()
@@ -697,12 +698,13 @@ def train_and_evaluate_classifier(
             classProperty="flooded_mask",
             inputProperties=FLOOD_INPUT_PROPERTIES,
         )
-        trees = ee.List(ee.Dictionary(classifier.explain()).get("trees"))
 
-        dummy = ee.Feature()
+        trees = ee.List(ee.Dictionary(classifier.explain()).get("trees"))
+        dummy_geom = ee.Geometry.Point([0, 0])  # Add a dummy geometry
+        dummy = ee.Feature(dummy_geom)  # Create a dummy feature with the geometry
         col = ee.FeatureCollection(trees.map(lambda x: dummy.set("tree", x)))
 
-        return col, test_accuracy, validation_accuracy
+        return col
     except Exception as e:
         print(f"Unexpected error: {e}")
         return None, None
@@ -757,27 +759,31 @@ def process_all_flood_data():
 
     combined_image_collection = ee.ImageCollection([])
 
-    for country in TRAINING_DATA_COUNTRIES:
-        print(f"Processing flood data for {country}...")
+    def generate_flood_tif_list(training_data_countries):
+        all_tif_list = []
 
-        snake_case_place_name = country.replace(" ", "_").lower()
-        directory_name = f"{FLOOD_INPUTS_PATH}{snake_case_place_name}/"
+        for country in training_data_countries:
+            print(f"Processing flood data for {country}...")
 
-        if not data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
-            print(f"No training data found for {country}. Skipping...")
-            continue
+            snake_case_place_name = country.replace(" ", "_").lower()
+            directory_name = f"{FLOOD_INPUTS_PATH}{snake_case_place_name}/"
 
-        print(f"Reading images for {country} into collection...")
-        country_image_collection = read_images_into_collection(
-            GOOGLE_CLOUD_BUCKET, directory_name
-        )
-        if country_image_collection.size().getInfo() == 0:
-            print(f"No images found for {country}. Skipping...")
-            continue
+            if not data_exists(GOOGLE_CLOUD_BUCKET, directory_name):
+                print(f"No training data found for {country}. Skipping...")
+                continue
 
-        combined_image_collection = combined_image_collection.merge(
-            country_image_collection
-        )
+            print(f"Data for {country} exists. Collecting URIs...")
+            uris = list_and_check_gcs_files(GOOGLE_CLOUD_BUCKET, directory_name)
+            all_tif_list.extend(uris)
+
+        return all_tif_list
+
+    training_data_tif_list = generate_flood_tif_list(TRAINING_DATA_COUNTRIES)
+
+    if training_data_tif_list:
+        combined_image_collection = read_images_into_collection(training_data_tif_list)
+    else:
+        print("No training data found for any country.")
 
     if combined_image_collection.size().getInfo() == 0:
         print("No images found in any collections. Exiting...")
@@ -787,7 +793,7 @@ def process_all_flood_data():
 
     bbox = get_area_of_interest(TRAINING_DATA_COUNTRIES)
 
-    col, test_accuracy, validation_accuracy = train_and_evaluate_classifier(
+    col = train_and_evaluate_classifier(
         combined_image_collection, bbox, GOOGLE_CLOUD_BUCKET, "combined_model"
     )
     if col is None:
@@ -801,14 +807,29 @@ def process_all_flood_data():
             description=description,
             bucket=bucket,
             fileNamePrefix=file_name_prefix,
+            fileFormat="CSV",
         )
         task.start()
         print(f"Exporting trained flood model to GCS {file_name_prefix}.")
         return task
 
+    def export_rf_trees_to_asset(col, description, assetId):
+        task = ee.batch.Export.table.toAsset(
+            collection=col,
+            description=description,
+            assetId=assetId,
+        )
+        task.start()
+        print(f"Exporting trained flood model to {assetId}.")
+        return task
+
     # Export and monitor the task
-    task = export_rf_trees_to_gcs(
-        pcol, "Export Flood Model", FLOOD_MODEL_ASSET_ID, bucket, FLOOD_OUTPUTS_PATH
+    task = export_rf_trees_to_asset(
+        col,
+        "Export Flood Model",
+        FLOOD_MODEL_ASSET_ID,
+        # GOOGLE_CLOUD_BUCKET,
+        # FLOOD_OUTPUTS_PATH,
     )
     monitor_tasks([task], 60)
 
@@ -923,19 +944,6 @@ def process_data_to_classify(bbox):
     return image_to_classify
 
 
-def classify_image(image_to_classify, FLOOD_INPUT_PROPERTIES, model_asset_id):
-    """Classify the image using the pre-trained model."""
-    regressor = ee.Classifier.load(model_asset_id)
-    return image_to_classify.select(FLOOD_INPUT_PROPERTIES).classify(regressor)
-
-
-def initialize_storage_client(project, GOOGLE_CLOUD_BUCKET):
-    """Initialize the Google Cloud Storage client."""
-    storage_client = storage.Client(project=project)
-    bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
-    return bucket
-
-
 def export_predictions(classified_image, place_name, bucket, directory_name, scale):
     """Export the predictions to Google Cloud Storage."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
@@ -956,6 +964,20 @@ def export_predictions(classified_image, place_name, bucket, directory_name, sca
     return task
 
 
+def row_to_tree(row):
+    # This is a placeholder function. You need to implement it based on your CSV structure.
+    # For example, if your CSV has columns for 'feature', 'threshold', 'left_value', 'right_value', etc.,
+    # you would reconstruct the tree structure from these values.
+    tree = {
+        "feature": row["feature"],
+        "threshold": row["threshold"],
+        "left_value": row["left_value"],
+        "right_value": row["right_value"],
+        # Add more fields based on your CSV structure
+    }
+    return tree
+
+
 def predict(place_name):
     """Main function to predict flood risk for a given place and export the result."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
@@ -971,9 +993,14 @@ def predict(place_name):
     print("Processing data to classify...")
     bbox = get_area_of_interest(place_name)
     image_to_classify = process_data_to_classify(bbox)
-    classified_image = classify_image(
-        image_to_classify, FLOOD_INPUT_PROPERTIES, FLOOD_MODEL_ASSET_ID
-    )
+
+    # load classifier
+    trees = ee.FeatureCollection(FLOOD_MODEL_ASSET_ID).aggregate_array("tree")
+    classifier = ee.Classifier.decisionTreeEnsemble(trees).setOutputMode("raw")
+
+    result = image_to_classify.select(FLOOD_INPUT_PROPERTIES).classify(classifier)
+    max = result.reduce(ee.Reducer.mode())
+    classified_image = result.arrayReduce(ee.Reducer.mean(), ee.List([0])).arrayGet(0)
 
     bucket = initialize_storage_client(GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_BUCKET)
     task = export_predictions(

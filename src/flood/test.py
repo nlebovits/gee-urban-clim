@@ -69,7 +69,7 @@ def train_and_evaluate_classifier(image_collection, output_asset_id):
 
     classifier = ee.Classifier.smileRandomForest(10).train(
         features=training_samples,
-        classProperty="class",
+        classProperty="flooded_mask",
         inputProperties=FLOOD_INPUT_PROPERTIES,
     )
 

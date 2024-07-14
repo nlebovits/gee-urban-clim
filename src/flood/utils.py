@@ -699,9 +699,10 @@ def train_and_evaluate_classifier(
             inputProperties=FLOOD_INPUT_PROPERTIES,
         )
 
+        print("Exporting the classifier...")
         trees = ee.List(ee.Dictionary(classifier.explain()).get("trees"))
-        dummy_geom = ee.Geometry.Point([0, 0])  # Add a dummy geometry
-        dummy = ee.Feature(dummy_geom)  # Create a dummy feature with the geometry
+        dummy_geom = ee.Geometry.Point([0, 0])
+        dummy = ee.Feature(dummy_geom)
         col = ee.FeatureCollection(trees.map(lambda x: dummy.set("tree", x)))
 
         return col
@@ -816,7 +817,7 @@ def process_all_flood_data():
     def export_rf_trees_to_asset(col, description, assetId):
         task = ee.batch.Export.table.toAsset(
             collection=col,
-            description=description,
+            description="Export Flood Model",
             assetId=assetId,
         )
         task.start()
@@ -964,20 +965,6 @@ def export_predictions(classified_image, place_name, bucket, directory_name, sca
     return task
 
 
-def row_to_tree(row):
-    # This is a placeholder function. You need to implement it based on your CSV structure.
-    # For example, if your CSV has columns for 'feature', 'threshold', 'left_value', 'right_value', etc.,
-    # you would reconstruct the tree structure from these values.
-    tree = {
-        "feature": row["feature"],
-        "threshold": row["threshold"],
-        "left_value": row["left_value"],
-        "right_value": row["right_value"],
-        # Add more fields based on your CSV structure
-    }
-    return tree
-
-
 def predict(place_name):
     """Main function to predict flood risk for a given place and export the result."""
     snake_case_place_name = place_name.replace(" ", "_").lower()
@@ -996,7 +983,7 @@ def predict(place_name):
 
     # load classifier
     trees = ee.FeatureCollection(FLOOD_MODEL_ASSET_ID).aggregate_array("tree")
-    classifier = ee.Classifier.decisionTreeEnsemble(trees).setOutputMode("raw")
+    classifier = ee.Classifier.decisionTreeEnsemble(trees).setOutputMode("PROBABILITY")
 
     result = image_to_classify.select(FLOOD_INPUT_PROPERTIES).classify(classifier)
     max = result.reduce(ee.Reducer.mode())

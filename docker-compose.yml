@@ -4,4 +4,12 @@ services:
     build: .
     volumes:
       - ./src:/usr/src/app
+      - ./credentials:/usr/src/app/credentials
     command: sh -c "pipenv run black /usr/src/app"
+
+  main:
+    build: .
+    volumes:
+      - ./src:/usr/src/app
+      - ./credentials:/usr/src/app/credentials
+    command: sh -c 'pipenv run python /usr/src/app/main.py'

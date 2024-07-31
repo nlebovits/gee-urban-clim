@@ -1,16 +1,12 @@
-import argparse
-import csv
 import json
 import os
 from collections import Counter
 from datetime import datetime, timedelta
-from io import BytesIO, StringIO
+from io import BytesIO
 
 import ee
-import geemap
 import numpy as np
 import pandas as pd
-import pretty_errors
 from dotenv import load_dotenv
 from google.cloud import storage
 
@@ -100,7 +96,6 @@ def filter_data_from_gcs(country_name):
 
 
 def make_training_data(bbox, start_date, end_date):
-
     before_start = (start_date - timedelta(days=10)).strftime("%Y-%m-%d")
     before_end = start_date.strftime("%Y-%m-%d")
 
@@ -108,10 +103,6 @@ def make_training_data(bbox, start_date, end_date):
     after_end = (end_date + timedelta(days=10)).strftime("%Y-%m-%d")
 
     print(f"Generating training data for {start_date} to {end_date}...")
-
-    year_before_start = start_date - timedelta(days=365)
-    start_of_year = datetime(year_before_start.year, 1, 1)
-    end_of_year = datetime(year_before_start.year, 12, 31)
 
     dem = ee.Image("WWF/HydroSHEDS/03VFDEM").clip(bbox)
     slope = ee.Terrain.slope(dem)
@@ -200,9 +191,6 @@ def make_training_data(bbox, start_date, end_date):
 
     # Polarization (choose either "VH" or "VV")
     polarization = "VH"  # or "VV"
-
-    # Pass direction (choose either "DESCENDING" or "ASCENDING")
-    pass_direction = "DESCENDING"  # or "ASCENDING"
 
     # Difference threshold to be applied on the difference image (after flood - before flood)
     # It has been chosen by trial and error. Adjust as needed.
@@ -332,7 +320,6 @@ def make_training_data(bbox, start_date, end_date):
 
 def generate_and_export_training_data():
     for country in TRAINING_DATA_COUNTRIES:
-
         print(f"Generating flood training data for {country}...")
 
         snake_case_place_name = country.replace(" ", "_").lower()
@@ -742,7 +729,6 @@ def read_images_into_collection(GOOGLE_CLOUD_BUCKET, prefix):
 
 
 def process_all_flood_data():
-
     if ee.data.getInfo(FLOOD_MODEL_ASSET_ID):
         print(
             f"Model already exists at {FLOOD_MODEL_ASSET_ID}. Skipping training and evaluation."
@@ -804,7 +790,6 @@ def process_all_flood_data():
 
 
 def process_data_to_classify(bbox):
-
     dem = ee.Image("WWF/HydroSHEDS/03VFDEM").clip(bbox)
     slope = ee.Terrain.slope(dem)
     landcover = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(bbox)

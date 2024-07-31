@@ -1,33 +1,10 @@
-import argparse
-import csv
-import json
 import os
+import re
 import time
-from collections import Counter
-from datetime import datetime, timedelta
-from io import BytesIO, StringIO
 
 import ee
-import geemap
-import numpy as np
-import pandas as pd
-import pretty_errors
 from dotenv import load_dotenv
 from google.cloud import storage
-
-from src.config.config import (
-    EMDAT_DATA_PATH,
-    FLOOD_MODEL_ASSET_ID,
-    TRAINING_DATA_COUNTRIES,
-)
-from src.constants.constants import (
-    FLOOD_INPUT_PROPERTIES,
-    FLOOD_INPUTS_PATH,
-    FLOOD_OUTPUTS_PATH,
-    FLOOD_SCALE,
-    LANDCOVER_SCALE,
-)
-
 
 from src.utils.pygeoboundaries.main import get_area_of_interest
 
@@ -249,7 +226,6 @@ def read_images_into_collection(uri_list):
 
 # function to export a trained classifier-------------------------------------------------------
 def export_model_as_ee_asset(regressor, description, asset_id):
-
     # Export the classifier
     task = ee.batch.Export.classifier.toAsset(
         classifier=regressor,

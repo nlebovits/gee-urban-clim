@@ -5,10 +5,7 @@ from datetime import datetime
 from io import StringIO
 
 import ee
-import geemap
-import pretty_errors
 from dotenv import load_dotenv
-from google.cloud import storage
 
 from src.config.config import HEAT_MODEL_ASSET_ID, TRAINING_DATA_COUNTRIES
 from src.constants.constants import (
@@ -19,16 +16,13 @@ from src.constants.constants import (
 )
 from src.utils.pygeoboundaries.main import get_area_of_interest
 from src.utils.utils import (
-    classify_image,
     data_exists,
-    export_predictions,
+    export_model_as_ee_asset,
     initialize_storage_client,
+    list_and_check_gcs_files,
     make_snake_case,
     monitor_tasks,
-    start_export_task,
-    list_and_check_gcs_files,
     read_images_into_collection,
-    export_model_as_ee_asset,
 )
 
 # Load environment variables
@@ -97,8 +91,6 @@ def process_year(year, bbox, ndvi_min, ndvi_max):
         return lst
 
     lstCollection = imageCollection.map(calculate_lst)
-    hotDaysCollection = lstCollection.map(lambda image: image.gte(33))
-    hotDaysYear = hotDaysCollection.sum().rename("hot_days")
     array = lstCollection.toArray()
     sortedArray = array.arraySort().arraySlice(0, -5)
     medianOfTop5 = (
@@ -358,7 +350,6 @@ def train_and_evaluate():
 
     training_sample = stratified_sample.randomColumn()
     training = training_sample.filter(ee.Filter.lt("random", 0.7))
-    testing = training_sample.filter(ee.Filter.gte("random", 0.7))
 
     inputProperties = HEAT_INPUT_PROPERTIES
     numTrees = 10
@@ -390,10 +381,6 @@ def train_and_evaluate():
         scale=HEAT_SCALE,
         maxPixels=1e14,
     )
-
-    rmse = ee.Number(mean_squared_error.get("difference")).sqrt()
-    rmse_feature = ee.Feature(None, {"RMSE": rmse})
-
     output_path = f"{HEAT_OUTPUTS_PATH}{HEAT_MODEL_ASSET_ID}/rmse_results"
 
     def export_results_to_cloud_storage(result, result_type, output_path):

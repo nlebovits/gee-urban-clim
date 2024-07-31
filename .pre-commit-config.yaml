@@ -1,0 +1,28 @@
+repos:
+  # Python hooks
+  - repo: local
+    hooks:
+      # Ruff for Python linting
+      - id: ruff
+        name: ruff (Python linting)
+        entry: ruff check --fix
+        language: python
+        types_or: [python, pyi, jupyter]
+        files: \.py$
+        exclude: ^data/src/awkde/
+
+      # Ruff for Python formatting
+      - id: ruff-format
+        name: ruff-format (Python formatting)
+        entry: ruff format
+        language: python
+        types_or: [python, pyi, jupyter]
+        files: \.py$
+        exclude: ^data/src/awkde/
+
+      # Dependency checks for Python
+      - id: check-python-dependencies
+        name: Check Python dependencies
+        entry: bash -c 'cd data/src && pipenv check --bare --quiet || (echo "Python dependencies check failed" && exit 1)'
+        language: system
+        files: ^data/src/Pipfile$

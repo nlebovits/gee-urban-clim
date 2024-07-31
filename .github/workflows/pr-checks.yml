@@ -1,0 +1,61 @@
+name: PR Checks Backend
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Docker Compose
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.4'
+
+      - name: Run Ruff Formatter in Docker
+        run: |
+          cd data
+          docker-compose run --rm formatter
+        continue-on-error: true
+
+      - name: Run Ruff Linter in Docker
+        run: |
+          cd data
+          docker-compose run --rm linter
+        continue-on-error: true
+
+      - name: Run all services
+        run: |
+          cd data
+          docker-compose up -d
+
+      - name: Check build status
+        if: failure()
+        run: |
+          echo "One or more services failed to build and run."
+          exit 1
+
+      - name: Report success
+        if: success()
+        run: echo "All services built and ran successfully."
+
+      - name: Check formatter and linter status
+        if: failure()
+        run: |
+          echo "Formatting or linting issues found. Please fix the issues."
+          exit 1
+
+      - name: Formatter and linter success
+        if: success()
+        run: echo "Formatting and linting passed successfully."

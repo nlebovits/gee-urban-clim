@@ -1,7 +1,18 @@
 version: "3.11"
 services:
+
   formatter:
-    build: .
+    build:
+      context: .
     volumes:
       - ./src:/usr/src/app
-    command: sh -c "pipenv run black /usr/src/app"
+    command: sh -c "pip install ruff && ruff /usr/src/app --fix"
+    network_mode: 'host'
+
+  linter:
+    build:
+      context: .
+    volumes:
+      - ./src:/usr/src/app
+    command: sh -c "pip install ruff && ruff check /usr/src/app"
+    network_mode: 'host'

@@ -213,6 +213,7 @@ def process_heat_data(place_name):
             fileNamePrefix=f"{directory_name}{year}/heat_{year}",
             scale=scale,
             region=bbox.getInfo()["coordinates"],
+            maxPixels=1e13,
         )
         task.start()
         tasks.append(task)

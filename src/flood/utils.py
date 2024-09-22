@@ -388,7 +388,7 @@ def aggregate_samples(
     flooded_mask_band="flooded_mask",
     batch_size=5,  # Number of images to process in each batch
 ):
-    """Aggregate samples based on flooded status and export as GeoJSON."""
+    """Aggregate samples based on flooded status and export as a GeoJSON."""
 
     def process_image(image):
         # Apply stratified sampling based on land cover classes
@@ -896,23 +896,58 @@ def process_data_to_classify(bbox):
     return image_to_classify
 
 
-def classify_image(image_to_classify, FLOOD_INPUT_PROPERTIES, model_asset_id):
-    """Classify the image using the pre-trained model."""
+def classify_image(
+    image_to_classify: ee.Image, FLOOD_INPUT_PROPERTIES: list[str], model_asset_id: str
+) -> ee.Image:
+    """
+    Classify the image using the pre-trained model.
+
+    Args:
+        image_to_classify (ee.Image): The image to be classified.
+        FLOOD_INPUT_PROPERTIES (list[str]): The list of input properties for the classification.
+        model_asset_id (str): The asset ID of the pre-trained model to use for classification.
+
+    Returns:
+        ee.Image: The classified image.
+    """
     regressor = ee.Classifier.load(model_asset_id)
     return image_to_classify.select(FLOOD_INPUT_PROPERTIES).classify(regressor)
 
 
-def initialize_storage_client(project, GOOGLE_CLOUD_BUCKET):
-    """Initialize the Google Cloud Storage client."""
+def initialize_storage_client(project: str, GOOGLE_CLOUD_BUCKET: str) -> Bucket:
+    """
+    Initialize the Google Cloud Storage client and return the storage bucket.
+
+    Args:
+        project (str): The Google Cloud project ID.
+        GOOGLE_CLOUD_BUCKET (str): The name of the Google Cloud Storage bucket.
+
+    Returns:
+        Bucket: A Google Cloud Storage bucket object.
+    """
     storage_client = storage.Client(project=project)
     bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
     return bucket
 
 
-def export_predictions(classified_image, place_name, bucket, directory_name, scale):
-    """Export the predictions to Google Cloud Storage."""
-    snake_case_place_name = place_name.replace(" ", "_").lower()
-    predicted_image_filename = f"predicted_flood_risk_{snake_case_place_name}"
+def export_predictions(
+    classified_image, place_name: str, bucket: Bucket, directory_name: str, scale: float
+) -> object:
+    """
+    Export the predictions to Google Cloud Storage.
+
+    Args:
+        classified_image: The image to be exported.
+        place_name (str): The name of the place for which predictions are being exported.
+        bucket (Bucket): The Google Cloud Storage bucket where the predictions will be uploaded.
+        directory_name (str): The directory name in the bucket where the predictions will be stored.
+        scale (float): The scale to be used for the export.
+
+    Returns:
+        object: The export task object.
+    """
+    snake_case_place_name: str = place_name.replace(" ", "_").lower()
+    predicted_image_filename: str = f"predicted_flood_risk_{snake_case_place_name}"
 
     blob = bucket.blob(directory_name)
     blob.upload_from_string(
@@ -929,11 +964,16 @@ def export_predictions(classified_image, place_name, bucket, directory_name, sca
     return task
 
 
-def predict(place_name):
-    """Main function to predict flood risk for a given place and export the result."""
-    snake_case_place_name = place_name.replace(" ", "_").lower()
-    base_directory = f"{FLOOD_OUTPUTS_PATH}{snake_case_place_name}/"
-    predicted_image_filename = f"predicted_flood_risk_{snake_case_place_name}"
+def predict(place_name: str) -> None:
+    """
+    Main function to predict flood risk for a given place and export the result.
+
+    Args:
+        place_name (str): The name of the place for which flood risk is predicted.
+    """
+    snake_case_place_name: str = place_name.replace(" ", "_").lower()
+    base_directory: str = f"{FLOOD_OUTPUTS_PATH}{snake_case_place_name}/"
+    predicted_image_filename: str = f"predicted_flood_risk_{snake_case_place_name}"
 
     if data_exists(GOOGLE_CLOUD_BUCKET, f"{base_directory}{predicted_image_filename}"):
         print(

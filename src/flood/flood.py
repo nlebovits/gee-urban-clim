@@ -5,9 +5,16 @@ from .utils import predict
 from .utils import process_all_flood_data as train_and_evaluate
 
 
-def main(place_name):
+def main(place_name: str) -> None:
+    """
+    Run the flood prediction pipeline for a given place.
+
+    Args:
+        place_name (str): The name of the place to generate flood hazard predictions for.
+    """
     make_training_data()
     train_and_evaluate()
+
     print(f"Predicting for {place_name}...")
     predict(place_name)
     print(f"Prediction for {place_name} completed.")

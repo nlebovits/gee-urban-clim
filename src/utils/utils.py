@@ -17,8 +17,17 @@ ee.Initialize(project=GOOGLE_CLOUD_PROJECT)
 
 
 # function to initialize google cloud storage connection-------------------------------------------------------
-def initialize_storage_client(project, GOOGLE_CLOUD_BUCKET):
-    """Initialize the Google Cloud Storage client."""
+def initialize_storage_client(project: str, GOOGLE_CLOUD_BUCKET: str) -> Bucket:
+    """
+    Initialize the Google Cloud Storage client and return the storage bucket.
+
+    Args:
+        project (str): The Google Cloud project ID.
+        GOOGLE_CLOUD_BUCKET (str): The name of the Google Cloud Storage bucket.
+
+    Returns:
+        Bucket: A Google Cloud Storage bucket object.
+    """
     storage_client = storage.Client(project=project)
     bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
     return bucket
@@ -238,8 +247,20 @@ def export_model_as_ee_asset(regressor, description, asset_id):
 
 
 # function to import a trained classifier and classify an image-------------------------------------------------------
-def classify_image(image_to_classify, input_properties, model_asset_id):
-    """Classify the image using the pre-trained model."""
+def classify_image(
+    image_to_classify: ee.Image, input_properties: list[str], model_asset_id: str
+) -> ee.Image:
+    """
+    Classify the image using a pre-trained model.
+
+    Args:
+        image_to_classify (ee.Image): The image to be classified.
+        input_properties (list[str]): A list of input properties (bands) used for classification.
+        model_asset_id (str): The asset ID of the pre-trained model to use for classification.
+
+    Returns:
+        ee.Image: The classified image.
+    """
     regressor = ee.Classifier.load(model_asset_id)
     return image_to_classify.select(input_properties).classify(regressor)
 
@@ -331,24 +352,34 @@ def predict(
 
 # function to export predictions-------------------------------------------------------
 def export_predictions(
-    classified_image, predicted_image_filename, bucket, directory_name, scale
-):
-    """Export the predictions to Google Cloud Storage."""
-    # Ensure the directory exists by uploading an empty file
+    classified_image, place_name: str, bucket: Bucket, directory_name: str, scale: float
+) -> object:
+    """
+    Export the predictions to Google Cloud Storage.
+
+    Args:
+        classified_image: The image to be exported.
+        place_name (str): The name of the place for which predictions are being exported.
+        bucket (Bucket): The Google Cloud Storage bucket where the predictions will be uploaded.
+        directory_name (str): The directory name in the bucket where the predictions will be stored.
+        scale (float): The scale to be used for the export.
+
+    Returns:
+        object: The export task object.
+    """
+    snake_case_place_name: str = place_name.replace(" ", "_").lower()
+    predicted_image_filename: str = f"predicted_flood_risk_{snake_case_place_name}"
+
     blob = bucket.blob(directory_name)
     blob.upload_from_string(
         "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
     )
 
-    # Construct the correct file path for the export
-    file_path = f"{directory_name}{predicted_image_filename}"
-
-    # Start export task
     task = start_export_task(
         classified_image,
-        predicted_image_filename,
+        f"{place_name} predicted flood risk",
         bucket.name,
-        file_path,
+        directory_name + predicted_image_filename,
         scale,
     )
     return task

@@ -23,7 +23,13 @@ from src.constants.constants import (
     LANDCOVER_SCALE,
 )
 from src.utils.pygeoboundaries.main import get_area_of_interest
-from src.utils.utils import data_exists, monitor_tasks, start_export_task
+from src.utils.utils import (
+    classify_image,
+    data_exists,
+    export_predictions,
+    initialize_storage_client,
+    monitor_tasks,
+)
 
 load_dotenv()
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -894,74 +900,6 @@ def process_data_to_classify(bbox):
     )
 
     return image_to_classify
-
-
-def classify_image(
-    image_to_classify: ee.Image, FLOOD_INPUT_PROPERTIES: list[str], model_asset_id: str
-) -> ee.Image:
-    """
-    Classify the image using the pre-trained model.
-
-    Args:
-        image_to_classify (ee.Image): The image to be classified.
-        FLOOD_INPUT_PROPERTIES (list[str]): The list of input properties for the classification.
-        model_asset_id (str): The asset ID of the pre-trained model to use for classification.
-
-    Returns:
-        ee.Image: The classified image.
-    """
-    regressor = ee.Classifier.load(model_asset_id)
-    return image_to_classify.select(FLOOD_INPUT_PROPERTIES).classify(regressor)
-
-
-def initialize_storage_client(project: str, GOOGLE_CLOUD_BUCKET: str) -> Bucket:
-    """
-    Initialize the Google Cloud Storage client and return the storage bucket.
-
-    Args:
-        project (str): The Google Cloud project ID.
-        GOOGLE_CLOUD_BUCKET (str): The name of the Google Cloud Storage bucket.
-
-    Returns:
-        Bucket: A Google Cloud Storage bucket object.
-    """
-    storage_client = storage.Client(project=project)
-    bucket = storage_client.bucket(GOOGLE_CLOUD_BUCKET)
-    return bucket
-
-
-def export_predictions(
-    classified_image, place_name: str, bucket: Bucket, directory_name: str, scale: float
-) -> object:
-    """
-    Export the predictions to Google Cloud Storage.
-
-    Args:
-        classified_image: The image to be exported.
-        place_name (str): The name of the place for which predictions are being exported.
-        bucket (Bucket): The Google Cloud Storage bucket where the predictions will be uploaded.
-        directory_name (str): The directory name in the bucket where the predictions will be stored.
-        scale (float): The scale to be used for the export.
-
-    Returns:
-        object: The export task object.
-    """
-    snake_case_place_name: str = place_name.replace(" ", "_").lower()
-    predicted_image_filename: str = f"predicted_flood_risk_{snake_case_place_name}"
-
-    blob = bucket.blob(directory_name)
-    blob.upload_from_string(
-        "", content_type="application/x-www-form-urlencoded;charset=UTF-8"
-    )
-
-    task = start_export_task(
-        classified_image,
-        f"{place_name} predicted flood risk",
-        bucket.name,
-        directory_name + predicted_image_filename,
-        scale,
-    )
-    return task
 
 
 def predict(place_name: str) -> None:
